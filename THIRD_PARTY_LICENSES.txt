@@ -1,5 +1,5 @@
 ============================================================
-        THIRD-PARTY LICENSES FOR SECUDITOR Lite
+        THIRD-PARTY LICENSES FOR SECUDITOR LITE
 ============================================================
 
 This software distribution includes third-party open-source
