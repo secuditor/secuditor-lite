@@ -58,11 +58,6 @@ Compatible with:
 ### Secuditor running a security audit and displaying reports
 ![Demo](media_files/animated-gif-secuditor-prod.gif)
 
-<br>
-
-### Checking device OpSec, VPN status, public IP and geolocation
-![Demo](media_files/animated-gif-secuditor-vpn.gif)
-
 ---
 <br>
 
