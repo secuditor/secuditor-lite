@@ -35,7 +35,7 @@ It helps identify vulnerabilities, improve device OpSec, and simplify forensic a
 - Quick, comprehensive endpoint security audit report
 - Device Operational Security (OpSec) assessment tools
 - Advanced SSL/TLS interception with detailed analysis
-- Enhanced configuration detection and diagnostics log
+- Enhanced configuration check and diagnostic summary
 - Extended or short, easy to export reports (TXT format)
 - New analytical capabilities with improved security insights
 
@@ -66,7 +66,7 @@ Compatible with:
 ## Getting Started
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.0.8.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.0.8/SecuditorLite_2.0.8.zip)
+- #### [SecuditorLite_2.0.9.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.0.9/SecuditorLite_2.0.9.zip)
 
 ### 2️⃣ Extract & Run
 - Unzip the file
