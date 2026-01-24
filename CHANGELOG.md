@@ -3,7 +3,14 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ---
 
-## [2.0.8] – 16.01.2026 – Latest
+## [2.0.9] – 24.01.2026 – Latest
+### Improvements
+- Minor performance optimizations
+- Reshaped some report elements output
+
+---
+
+## [2.0.8] – 16.01.2026
 ### New
 - Renamed the software from **Secuditor Free** to **Secuditor Lite**
 
