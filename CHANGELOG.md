@@ -2,8 +2,19 @@
 All notable changes to **Secuditor Free** are documented in this file.
 
 ---
+## [2.1.0] – 27.01.2026 – Latest
+### New
+- Added “jumps” from the summary report for quick navigation
+- Added NTP remote server detection feature
+- Added WinRM remote access detection feature
 
-## [2.0.9] – 24.01.2026 – Latest
+### Improvements
+- Updated ASCII logo
+- Minor optimizations in category reports
+
+---
+
+## [2.0.9] – 24.01.2026
 ### Improvements
 - Minor performance optimizations
 - Reshaped some report elements output
