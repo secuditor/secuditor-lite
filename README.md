@@ -53,7 +53,7 @@ Compatible with:
 
 <a name="presentation"></a>
 
-## New Toolbar
+## Presentation (Windows 11)
 
 ### Buttons (right to left):
 - Download speed measurement  
@@ -63,19 +63,13 @@ Compatible with:
 - About  
 - Menu  
 
+### Secuditor performing a live security audit and displaying detailed reports
+
 <p align="center">
   <a>
-    <img src="media_files/Secuditor_Toolbar_2.1.0.png" alt="Secuditor Lite toolbar" />
+    <img src="media_files/animated-gif-secuditor-prod.gif" alt="Demo" />
   </a>
 </p>
-
----
-<br>
-
-## Presentation (Windows 11)
-
-### Secuditor performing a live security audit and displaying detailed reports
-![Demo](media_files/animated-gif-secuditor-prod.gif)
 
 ---
 <br>
