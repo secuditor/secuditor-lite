@@ -63,6 +63,7 @@ It helps identify vulnerabilities, improve device OpSec, and simplify forensic a
 - About  
 - Menu  
 
+*The animation below shows the full Secuditor Lite application in action*
 <p align="center">
   <a>
     <img src="media_files/animated-gif-secuditor-prod.gif" alt="Demo" />
