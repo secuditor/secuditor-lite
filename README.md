@@ -53,6 +53,25 @@ Compatible with:
 
 <a name="presentation"></a>
 
+## New Toolbar
+
+### Buttons (right to left):
+- Download speed measurement  
+- Network public IP and geolocation detection  
+- Export extended security audit report  
+- Start security audit  
+- About  
+- Menu  
+
+<p align="center">
+  <a>
+    <img src="media_files/Secuditor_Toolbar_2.1.0.png" alt="Secuditor Lite toolbar" />
+  </a>
+</p>
+
+---
+<br>
+
 ## Presentation (Windows 11)
 
 ### Secuditor performing a live security audit and displaying detailed reports
