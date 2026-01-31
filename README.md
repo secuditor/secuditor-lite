@@ -56,12 +56,12 @@ It helps identify system vulnerabilities, improve device OpSec, and simplify for
 ## Presentation (Windows 11)
 
 ### Toolbar buttons (right to left):
-- Internet speed measurement  
-- Network public IP and geolocation detection  
-- Export extended security audit report  
-- Start security audit  
-- About  
-- Menu  
+- Internet download speed measurement
+- Network public IP and geolocation detection
+- Export extended security audit report
+- Start security audit
+- About
+- Menu
 
 *The animation below shows the full Secuditor Lite application in action*
 <p align="center">
