@@ -60,7 +60,7 @@ It helps identify system vulnerabilities, improve device OpSec, and simplify for
 - Network public IP and geolocation detection
 - Export extended security audit report
 - Start security audit
-- About
+- About and contact us
 - Menu
 
 *The animation below shows the full Secuditor Lite application in action*
