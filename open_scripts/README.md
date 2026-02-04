@@ -1,6 +1,6 @@
 # Open Scripts
 
-A partial collection of open source Python modules developed as part of the **Secuditor project**. All **[modules](/open_scripts)** in this repository are **standalone** and **[MIT-licensed](/open_scripts/LICENSE.txt)**, some modules may require the installation of third party dependencies.
+A partial collection of open source Python modules developed as part of the **Secuditor project**. All **modules** in this repository are **standalone** and **[MIT-licensed](/open_scripts/LICENSE.txt)**, some modules may require the installation of third party dependencies.
 
 For the full application, visit **[Secuditor Lite](https://github.com/secuditor/secuditor-lite)** which is distributed separately as closed source **freeware**.
 
