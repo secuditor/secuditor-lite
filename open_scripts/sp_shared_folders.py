@@ -1,7 +1,7 @@
 # MIT License – Copyright (c) 2025 Menny Levinski
 
 """
-Mapping shared folders (requires admin permissions).
+Mapping shared folders on the device (requires admin permissions).
 
 - Third-party:
   - pywin32 (win32security, win32con, pythoncom)
