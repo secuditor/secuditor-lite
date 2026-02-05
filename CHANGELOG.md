@@ -3,7 +3,17 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ---
 
-## [2.1.1] – 2026-02-01 – Latest
+## [2.1.2] – 2026-02-05 – Latest
+### Improvements
+- Minor improvement to the logging workflow
+
+### Fixed
+- Resolved WinRM feature cache issue
+- Resolved default gateway cache issue
+
+---
+
+## [2.1.1] – 2026-02-01
 ### Added
 - Cache based module performance optimization
 - Enhanced speed test module performance and visuals
