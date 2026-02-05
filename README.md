@@ -145,9 +145,10 @@ The tool **Secuditor Lite** is distributed in its complete form as a closed sour
 
 <a name="more-info"></a>
 
-## Links and Licenses
+## Info, Links and Licenses
 
 - **[Changelog](CHANGELOG.md)**
+- **[Contributing](CONTRIBUTING.md)**
 - **[Software License](LICENSE.txt)**
 - **[Third Party Licenses](THIRD_PARTY_LICENSES.txt)**
 <br>
@@ -163,3 +164,4 @@ The tool **Secuditor Lite** is distributed in its complete form as a closed sour
 © 2025 Menahem Levinski. All rights reserved.
 <a href="#top">🔝</a>
 </p>
+
