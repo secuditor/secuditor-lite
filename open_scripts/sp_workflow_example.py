@@ -49,17 +49,23 @@ class ConsoleLogger:
         sys.excepthook = self._log_exceptions
         self.log(f"Logger initialized: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    def _ts(self):
+        return datetime.now().strftime("[%H:%M:%S]")
+
     def _log_exceptions(self, exc_type, exc_value, exc_traceback):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         traceback.print_exception(exc_type, exc_value, exc_traceback, file=self._log_buffer)
 
     def log(self, message: str):
         """Log message to console widget and buffer"""
-        self._log_buffer.write(message + "\n")
+        ts_message = f"{self._ts()} {message}"
+
+        self._log_buffer.write(ts_message + "\n")
         self._log_buffer.flush()
+
         if self._wrap_enabled:
             self.console.config(state="normal")
-            self.console.insert(tk.END, message + "\n")
+            self.console.insert(tk.END, ts_message + "\n")
             self.console.see(tk.END)
             self.console.config(state="disabled")
             self.console.update()
@@ -77,12 +83,13 @@ def mock_check(logger: ConsoleLogger, name: str):
     dot_count = [0]
 
     # Log the step name through the logger (adds to buffer)
-    logger._log_buffer.write(f"-> {name} ")
+    ts = datetime.now().strftime("[%H:%M:%S]")
+    logger._log_buffer.write(f"{ts} -> {name} ")
     logger._log_buffer.flush()
 
     # Insert into console widget
     logger.console.config(state="normal")
-    logger.console.insert(tk.END, f"-> {name} ")
+    logger.console.insert(tk.END, f"{ts} -> {name} ")
     logger.console.see(tk.END)
     logger.console.config(state="disabled")
 
