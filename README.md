@@ -78,7 +78,7 @@ It helps identify system vulnerabilities, improve device OpSec, detect network e
 ## Getting Started
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.1.1.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.1.1/SecuditorLite_2.1.1.zip)
+- #### [SecuditorLite_2.1.2.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.1.2/SecuditorLite_2.1.2.zip)
 
 ### 2️⃣ Extract & Run
 - Unzip the file
