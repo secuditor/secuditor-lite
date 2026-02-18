@@ -160,8 +160,26 @@ The tool **Secuditor Lite** is distributed in its complete form as a closed sour
 ---
 <br>
 
+## 📁 Project Structure
+
+```bash
+secuditor-lite/                   # Main project folder
+│
+├── media_files/                  # Media assets (images, GIFs)
+│
+├── open_scripts/                 # Open source Python scripts
+│
+├── CHANGELOG.md                  # Project change log
+├── CONTRIBUTING.md               # Contribution guidelines
+├── LICENSE.txt                   # License file
+├── README.md                     # Project overview and instructions
+├── SECURITY.md                   # Security policy
+└── THIRD_PARTY_LICENSES.txt      # Third-party software licenses
+```
+
+---
+<br>
 <p align="center">
 © 2025 Menahem Levinski. All rights reserved.
 <a href="#top">🔝</a>
 </p>
-
