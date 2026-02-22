@@ -33,7 +33,7 @@ It helps identify system vulnerabilities, improve device Operational Security (O
 ## Key Features
 
 - Quick, comprehensive endpoint security audit report
-- Device Operational Security (OpSec) assessment tools
+- Device Operational Security (OPSEC) assessment tools
 - Advanced SSL/TLS interception with detailed analysis
 - Enhanced configuration check and diagnostic summary
 - Extended or short, easy to export reports (TXT format)
