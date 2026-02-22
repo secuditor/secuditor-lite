@@ -63,7 +63,7 @@ It helps identify system vulnerabilities, improve device OpSec, detect network e
 - About and contact us
 - Menu
 
-*The animation below shows the full Secuditor Lite application in action*
+*The animation below shows Secuditor Lite application in action*
 <p align="center">
   <a>
     <img src="media_files/animated-gif-secuditor-fast.gif" alt="Demo" />
