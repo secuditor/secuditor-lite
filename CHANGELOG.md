@@ -3,7 +3,7 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ---
 
-## [2.1.3] – 2026-02-28
+## [2.1.3] – 2026-02-28 - Latest
 ### Improvements
 - Gateway discovery now supports IPv6
 
