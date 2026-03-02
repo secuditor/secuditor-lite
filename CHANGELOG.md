@@ -3,9 +3,10 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ---
 
-## [2.1.3] – 2026-02-28 - Latest
+## [2.1.3] – 2026-03-02 - Latest
 ### Improvements
-- Gateway discovery now supports IPv6
+- Gateway discovery now supports dual-stack (IPv4 + IPv6)
+- Network settings check now supports dual-stack (IPv4 + IPv6)
 
 ---
 
