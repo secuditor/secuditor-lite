@@ -5,7 +5,7 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ## [2.1.4] – 2026-03-07 - Latest
 ### Added
-- Left-click "Run Check" option to execute single security checks
+- Right-click "Run Check" option to execute single security checks
 - Controlled timestamps for console messages and exported logs
 
 ### Fixed
