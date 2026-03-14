@@ -3,7 +3,7 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ---
 
-## [2.1.5] – 2026-03-14 – Latest
+## [2.1.5] – 2026-03-14 Latest
 ### Added
 - IAS (Internet Authentication Service) server check
 - RRAS (Routing and Remote Access Service) server check
