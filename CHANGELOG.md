@@ -3,7 +3,19 @@ All notable changes to **Secuditor Free** are documented in this file.
 
 ---
 
-## [2.1.4] – 2026-03-07 - Latest
+## [2.1.5] – 2026-03-14  - Latest
+### Added
+- IAS (Internet Authentication Service) server check
+- RRAS (Routing and Remote Access Service) server check
+- VMMS virtualization service detection (Hyper-V / VMware / VirtualBox)
+- UPnP remote access check
+
+### Fixed
+- Resolved caching issue affecting certain system checks
+
+---
+
+## [2.1.4] – 2026-03-07
 ### Added
 - Right-click "Run Check" option to execute single security checks
 - Controlled timestamps for console messages and exported logs
