@@ -20,12 +20,14 @@ def _run(cmd):
 
 # --- Remote Server Settings ---
 def get_remote_server_settings():
+    
     result = {
         "DHCP": "Unknown",
         "DNS": "Unknown",
         "FTP": "Unknown",
         "NTP": "Unknown",
         "IIS": "Unknown",
+        "IAS": "Unknown",
         "PKI": "Unknown",
         "SSH": "Unknown",
         "SNMP": "Unknown",
@@ -34,8 +36,10 @@ def get_remote_server_settings():
         "IMAP": "Unknown",
         "DFSR": "Unknown",
         "LDAP": "Unknown",
-        "MSMQ":  "Unknown",
-        "MSSQL":  "Unknown",
+        "MSMQ": "Unknown",
+        "SQLDB": "Unknown",
+        "RRAS": "Unknown",
+        "VMMS": "Unknown",
         "TlntSvr": "Unknown",
     }
 
@@ -366,7 +370,7 @@ def get_remote_server_settings():
     except Exception:
         result["DFSR"] = "Unknown"
 
-    # --- MSSQL (SQL Server Engine only) ---
+    # --- SQL Databases (MSSQL / MySQL / MariaDB / PostgreSQL / MongoDB) ---
     try:
         output = subprocess.check_output(
             "sc query state= all",
@@ -381,13 +385,20 @@ def get_remote_server_settings():
         for line in output.splitlines():
             if "service_name:" in line:
                 svc = line.split(":", 1)[1].strip()
+
+                # Detect MSSQL
                 if svc == "mssqlserver" or svc.startswith("mssql$"):
                     instances.append(svc)
 
+                # Detect MySQL, MariaDB, PostgreSQL, MongoDB
+                if any(keyword in svc for keyword in ["mysql", "mariadb", "postgres", "mongodb"]):
+                    instances.append(svc)
+
         if not instances:
-            result["MSSQL"] = "No Server / Disabled"
+            result["SQLDB"] = "No Server / Disabled"
         else:
             running = False
+
             for inst in instances:
                 try:
                     state = subprocess.check_output(
@@ -401,17 +412,18 @@ def get_remote_server_settings():
                     if "running" in state:
                         running = True
                         break
+
                 except subprocess.CalledProcessError:
                     continue
 
-            result["MSSQL"] = "Enabled" if running else "Disabled"
+            result["SQLDB"] = "Enabled" if running else "Disabled"
 
     except subprocess.CalledProcessError:
-        result["MSSQL"] = "Unknown"
+        result["SQLDB"] = "Unknown"
     except Exception:
-        result["MSSQL"] = "Unknown"
-
-        # --- MSMQ (Message Queuing) ---
+        result["SQLDB"] = "Unknown"
+        
+    # --- MSMQ (Message Queuing) ---
     try:
         output = subprocess.check_output(
             'powershell -Command "Get-Service MSMQ -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
@@ -431,6 +443,110 @@ def get_remote_server_settings():
         result["MSMQ"] = "No Server / Disabled"
     except Exception:
         result["MSMQ"] = "Unknown"
+
+    # --- RRAS (Routing and Remote Access Service) ---
+    try:
+        output = subprocess.check_output(
+            'powershell -Command "Get-Service RemoteAccess -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            shell=True, text=True, encoding="utf-8"
+        ).strip()
+
+        if output.lower() == "running":
+            result["RRAS"] = "Enabled"
+        elif output.lower() == "stopped":
+            result["RRAS"] = "Disabled"
+        elif output == "":
+            result["RRAS"] = "No Server / Disabled"
+        else:
+            result["RRAS"] = output or "Unknown"
+
+    except subprocess.CalledProcessError:
+        result["RRAS"] = "No Server / Disabled"
+    except Exception:
+        result["RRAS"] = "Unknown"
+
+    # --- IAS (Internet Authentication Service) ---
+    try:
+        output = subprocess.check_output(
+            'powershell -Command "Get-Service IAS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            shell=True,
+            text=True,
+            encoding="utf-8"
+        ).strip()
+
+        if output.lower() == "running":
+            result["IAS"] = "Enabled"
+        elif output.lower() == "stopped":
+            result["IAS"] = "Disabled"
+        elif output == "":
+            result["IAS"] = "No Server / Disabled"
+        else:
+            result["IAS"] = output or "Unknown"
+
+    except subprocess.CalledProcessError:
+        result["IAS"] = "No Server / Disabled"
+    except Exception:
+        result["IAS"] = "Unknown"
+
+    # --- VMMS / Virtualization Services (Hyper-V, VMware, VirtualBox) ---
+    try:
+        output = subprocess.check_output(
+            "sc query state= all",
+            shell=True,
+            text=True,
+            encoding="utf-8",
+            stderr=subprocess.DEVNULL
+        ).lower()
+
+        instances = []
+
+        for line in output.splitlines():
+            if "service_name:" in line:
+                svc = line.split(":", 1)[1].strip()
+
+                # Hyper-V
+                if svc == "vmms":
+                    instances.append(svc)
+
+                # VMware Workstation / Server
+                if svc in [
+                    "vmwareauthorizationservice",
+                    "vmwareworkstationserver",
+                    "vmnetdhcp",
+                    "vmnetnat"
+                ]:
+                    instances.append(svc)
+
+                # VirtualBox
+                if svc in ["vboxdrv", "vboxsvc"]:
+                    instances.append(svc)
+
+        if not instances:
+            result["VMMS"] = "No Server / Disabled"
+        else:
+            running = False
+            for inst in instances:
+                try:
+                    state = subprocess.check_output(
+                        f"sc query {inst}",
+                        shell=True,
+                        text=True,
+                        encoding="utf-8",
+                        stderr=subprocess.DEVNULL
+                    ).lower()
+
+                    if "running" in state:
+                        running = True
+                        break
+                except subprocess.CalledProcessError:
+                    continue
+
+            result["VMMS"] = "Enabled" if running else "Disabled"
+
+    except subprocess.CalledProcessError:
+        result["VMMS"] = "Unknown"
+    except Exception:
+        result["VMMS"] = "Unknown"
 
     return format_remote_server_settings(result)
  
