@@ -3,7 +3,7 @@
 """
 Detects the local network's default gateway and public IP.
 
-Third-party: requests (urllib3), psutil
+Third-party: requests (urllib3), psutil.
 """
 
 import subprocess
@@ -21,55 +21,81 @@ warnings.simplefilter("ignore", InsecureRequestWarning)
 
 # --- Get default gateway ---
 def get_default_gateway():
-    """Return the default gateway IP address."""
+    """Return dict with IPv4 and IPv6 default gateways."""
+
+    gateways = {"IPv4": None, "IPv6": None}
+
     try:
-        output = subprocess.check_output("ipconfig", shell=True, text=True)
+        output = subprocess.check_output(
+            "ipconfig", shell=True, text=True, encoding="utf-8", errors="ignore"
+        )
+
         for line in output.splitlines():
             if "Default Gateway" in line:
                 ip = line.split(":")[-1].strip()
+
+                # IPv4
                 if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
-                    return ip
+                    gateways["IPv4"] = ip
+
+                # IPv6
+                elif ":" in ip:
+                    gateways["IPv6"] = ip.split("%")[0]  # remove scope id
+
     except Exception:
         pass
-    return None
 
-# --- Ping device ---
+    if not gateways["IPv4"] and not gateways["IPv6"]:
+        return None
+    
+    return gateways
+
 def ping_device(ip):
-    """
-    Ping the gateway and return a concise result:
-    - 'Reply from ...' if reachable
-    - 'Request timed out' if not
-    """
+    """Ping IPv4 or IPv6 device."""
     try:
-        param = "-n" if platform.system().lower() == "windows" else "-c"
-        result = subprocess.run(["ping", param, "1", ip], capture_output=True, text=True)
+        system = platform.system().lower()
+
+        if ":" in ip:  # IPv6
+            param = "-n" if system == "windows" else "-c"
+            cmd = ["ping", "-6", param, "1", ip]
+        else:  # IPv4
+            param = "-n" if system == "windows" else "-c"
+            cmd = ["ping", param, "1", ip]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
         output = result.stdout.strip()
 
-        # Parse the output for the reply line
         for line in output.splitlines():
             line = line.strip()
-            if line.startswith("Reply from") or "Request timed out" in line:
+            if line.startswith("Reply from") or "TTL=" in line or "time=" in line:
                 return line
-        # fallback
+            if "Request timed out" in line:
+                return "Request timed out"
+
         return "No response"
+
     except Exception as e:
         return f"Ping failed: {e}"
 
-# --- Mac address ---
 def get_mac_from_arp(ip):
-    """Get MAC address of the gateway from ARP table."""
+    """Get MAC address for IPv4 only."""
+
+    if ":" in ip:
+        return None  # IPv6 → no ARP
+
     try:
         output = subprocess.check_output("arp -a", shell=True, text=True)
         for line in output.splitlines():
             if ip in line:
                 mac_match = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", line)
                 if mac_match:
+
                     return mac_match.group(0)
     except Exception:
         pass
+
     return None
 
-# --- Lookup vendor ---
 def lookup_vendor(mac, device_ip=None):
     """
     Lookup vendor from MAC address.
@@ -77,55 +103,62 @@ def lookup_vendor(mac, device_ip=None):
     2. Identify virtual / locally administered MACs.
     3. Optional: use ping_device for TTL/response heuristics if IP is provided.
     """
+    
     if not mac:
         return "Unknown"
 
+    vendor = "Unknown"
     oui = mac.replace("-", ":").upper()[:8]
 
     # --- First: try online API ---
     try:
         response = requests.get(f"https://api.macvendors.com/{mac}", timeout=3)
         if response.status_code == 200:
-            vendor = response.text.strip()
-            if vendor and "unknown" not in vendor.lower():
-                return vendor
+            api_vendor = response.text.strip()
+            if api_vendor and "unknown" not in api_vendor.lower():
+                vendor = api_vendor
     except Exception:
-        pass  # silently fallback
+        pass
 
-    # --- Third: check for virtual / locally administered MAC ---
-    first_byte = int(mac.split("-")[0], 16)
-    if first_byte & 0b00000010:  # locally administered bit
-        return "Virtual/Software MAC"
+    # --- Second: check for virtual / locally administered MAC ---
+    try:
+        first_byte = int(mac.split("-")[0], 16)
+        if first_byte & 0b00000010:
+            vendor = "Virtual/Software MAC"
+    except Exception:
+        pass
 
-    # --- Fourth: optional TTL-based heuristic using ping ---
+    # --- Third: optional TTL-based heuristic ---
     if device_ip:
         reply = ping_device(device_ip)
         ttl_match = re.search(r"TTL=(\d+)", reply, re.IGNORECASE)
         if ttl_match:
             ttl = int(ttl_match.group(1))
             if ttl <= 64:
-                return "Likely Linux/Unix device"
+                vendor = "Likely Linux/Unix device"
             elif ttl <= 128:
-                return "Likely Windows device"
+                vendor = "Likely Windows device"
             elif ttl <= 255:
-                return "Likely network appliance / router"
+                vendor = "Likely network appliance / router"
 
-    return "Unknown"
+    return vendor
 
-# --- Check https access ---
 def check_http_access(ip):
-    """Check if gateway responds to HTTP/HTTPS (router web interface)."""
+    """Check HTTP/HTTPS for IPv4 or IPv6."""
     for scheme in ["http", "https"]:
         try:
-            url = f"{scheme}://{ip}"
-            r = requests.get(url, timeout=3, verify=False)  # suppress cert warning
+            if ":" in ip:  # IPv6
+                url = f"{scheme}://[{ip}]"
+            else:
+                url = f"{scheme}://{ip}"
+
+            r = requests.get(url, timeout=3, verify=False)
             if r.status_code < 500:
                 return f"{scheme.upper()} Responding ({r.status_code})"
         except Exception:
             continue
     return "No web interface detected"
 
-# --- Detect NAT ---
 def detect_nat():
     """
     Detect NAT by comparing local and external IPs.
@@ -164,7 +197,6 @@ def detect_nat():
     except Exception:
         return "Error during detection"
 
-# --- Get public IP ---
 def get_external_ip():
     """Discover external/public IP."""
     try:
@@ -172,7 +204,6 @@ def get_external_ip():
     except Exception:
         return "Unavailable"
 
-# --- Gateway device settings ---
 def detect_gateway_device():
     """Main detection routine — returns a dict with gateway info."""
     result = {
@@ -186,8 +217,14 @@ def detect_gateway_device():
         "Public IP": "Unavailable"
     }
 
-    gw_ip = get_default_gateway()
-    if not gw_ip:
+    gateways = get_default_gateway()
+    if not gateways:
+        result["IP"] = "Not Found"
+        return result
+
+    gw_ip = gateways.get("IPv4") or gateways.get("IPv6")
+    result["IP"] = f"IPv4: {gateways.get('IPv4') or 'None'} | IPv6: {gateways.get('IPv6') or 'None'}"
+    if not gateways:
         result["IP"] = "Not Found"
         return result
 

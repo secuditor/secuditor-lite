@@ -157,16 +157,18 @@ def winrm_verdict(service, listeners, ports, risk):
 
 # --- Remote Access Settings ---
 def get_remote_access_settings():
+    
     result = {
         "Remote Desktop": "Unknown",
         "Remote Assistance": "Unknown",
         "PowerShell Remoting": "Unknown",
-        "COM Network Service": "Unknown",
+        "COM Network Service": "Unknown",        
         "RPC Print Service": "Unknown",
         "Rsync Service": "Unknown",
         "Telnet Service": "Unknown",
         "Bluetooth": "Unknown",
         "NetBIOS": "Unknown",
+        "UPnP": "Unknown",
         "WinRM": "Unknown",
         "SMB1": "Unknown",
         "SMB2": "Unknown",
@@ -400,7 +402,7 @@ def get_remote_access_settings():
                     reg_state = "Enabled, Potentially Dangerous (Firewall Off)"
 
         elif reg_output == "N":
-            reg_state = "Remote Disabled"
+            reg_state = "Remote Disabled"  # ✅ safest option
         else:
             reg_state = "Unknown"
 
@@ -561,10 +563,40 @@ def get_remote_access_settings():
     except Exception:
         result["Telnet Service"] = "Unknown"
 
-    # --- WinRM ---
-    winrm_data = audit_winrm()
-    result["WinRM"] = winrm_data["verdict"]
+    # --- UPnP Service ---
+    try:
+        services_to_check = ["upnphost"]  # UPnP Device Host is the real server part
+        running = False
+        installed = False
 
+        for svc in services_to_check:
+            try:
+                state = subprocess.check_output(
+                    f"sc query {svc}",
+                    shell=True,
+                    text=True,
+                    encoding="utf-8",
+                    stderr=subprocess.DEVNULL
+                ).lower()
+                installed = True
+                if "running" in state:
+                    running = True
+                    break
+            except subprocess.CalledProcessError:
+                continue
+
+        if not installed:
+            result["UPnP"] = "Disabled"
+        else:
+            result["UPnP"] = "Enabled" if running else "Disabled"
+
+    except Exception:
+        result["UPnP"] = "Unknown"
+    
+    # --- WinRM ---
+    winrm_data = audit_winrm()         # run full WinRM audit
+    result["WinRM"] = winrm_data["verdict"]
+    
     return format_remote_access_settings(result)
 
 def format_remote_access_settings(settings):
