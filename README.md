@@ -2,7 +2,7 @@
 
 <div align="center" style="line-height: 0;">
   <a href="https://github.com/secuditor/secuditor-lite">
-    <img src="media_files/Secuditor-logo-transparent2.png" alt="Secuditor Diagnostic Security Tool logo" width="250" height="250">
+    <img src="media_files/Secuditor-logo-transparent2.png" alt="Secuditor Diagnostic Security Tool logo" width="200" height="200">
   </a>
 </div>
 
