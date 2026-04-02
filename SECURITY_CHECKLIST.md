@@ -54,9 +54,9 @@ This file lists the structured and comprehensive security audit elements that **
 - User Account Control (UAC) settings  
 - Core isolation and memory protection  
 - PowerShell execution policy
-- EFS encryption protocol usage
-- Disk encryption (BitLocker) status
-- Removable storage detection
+- EFS encryption protocol usage  
+- Disk encryption (BitLocker) status  
+- Removable storage detection  
 - Secure Boot configuration  
 - System restore availability  
 
@@ -73,11 +73,11 @@ This file lists the structured and comprehensive security audit elements that **
 ---
 
 ### 🖥️ Server & Service Exposure
-- Detection of AD server roles and services  
+- Detection of active server roles and features  
 - DHCP, DNS, FTP, SSH, SNMP, SMTP, and more  
 - Web server (IIS) and database services  
 - Remote access and infrastructure services  
-- Identification of unnecessary or exposed services  
+- Identification of unsecured services  
 
 ---
 
@@ -140,5 +140,5 @@ This file lists the structured and comprehensive security audit elements that **
 
 ### 📜 Event Log Analysis
 - Windows security event logs inspection  
-- Analysis of authentication and login activity  
-- Identification of potential security incidents  
+- Authentication and login activity audit  
+- Potential security incidents review  
