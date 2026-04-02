@@ -195,6 +195,7 @@ secuditor-lite/                   # Main project folder
 ├── LICENSE.txt                   # License file
 ├── README.md                     # Project overview
 ├── SECURITY.md                   # Security policy
+├── SECURITY_CHECKLIST.md         # Security Checks & Diagnostics
 └── THIRD_PARTY_LICENSES.txt      # Third party licenses
 ```
 
