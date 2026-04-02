@@ -42,6 +42,27 @@ It helps identify system vulnerabilities, improve device Operational Security (O
 ---
 <br>
 
+## Security Checks & Diagnostics
+
+Secuditor Lite analyzes Windows systems across:
+
+- System overview & hardware analysis
+- Network configuration & gateway discovery
+- Shared folders & permissions mapping
+- Security controls (Firewall, AV, UAC, BitLocker, and more)
+- Remote access & server roles analysis
+- Credential integrity & password policies
+- Domain settings & user access
+- Sensitive data and paths exposure
+- Suspicious processes and connections
+- SSL interception analysis
+- Security event log audit
+
+➡️ See the full Checklist: [Security Checks](SECURITY_CHECKLIST.md)
+
+---
+<br>
+
 ## Standard Edition
 
 ### Compatible with:
