@@ -49,7 +49,7 @@ Secuditor Lite analyzes Windows systems across:
 - System overview & hardware analysis
 - Network configuration & gateway discovery
 - Shared folders & permissions mapping
-- Security controls (Firewall, AV, UAC, BitLocker, and more)
+- Security controls (AV, EDR, Firewall, UAC, and more)
 - Remote access & server roles analysis
 - Credential integrity & password policies
 - Domain settings & user access
