@@ -1,8 +1,8 @@
-# Open Scripts
+# Secuditor Lite - Open Scripts
 
-A partial collection of open-source Python modules developed as part of the **Secuditor project**. All **modules** in this repository are **standalone** and **[MIT-licensed](/open_scripts/LICENSE.txt)**, some modules may require the installation of third party dependencies.
+A collection of open-source Python modules developed as part of the **Secuditor project**. All **modules** in this folder are **standalone** and **[MIT-licensed](/open_scripts/LICENSE.txt)**, some modules may require the installation of third party dependencies.
 
-For the full application, visit **[Secuditor Lite](https://github.com/secuditor/secuditor-lite)** which is distributed separately as closed source **freeware**.
+For the full application, visit **[Secuditor Lite](https://github.com/secuditor/secuditor-lite)**, distributed separately as closed-source **freeware**.
 
 ---
 
@@ -38,7 +38,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 - Compatible with **Windows**  
 - Download the script and run it using Python:
   ```bash
-  python script_name.py
+  python sp_script_name.py
 - install third party package if needed:
   ```bash
   pip install package_name
