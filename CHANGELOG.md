@@ -1,5 +1,5 @@
 # Changelog
-All notable changes to **Secuditor Free** are documented in this file.
+All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
