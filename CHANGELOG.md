@@ -3,7 +3,19 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.1.5] – 2026-03-14 Latest
+## [2.1.6] – 2026-04-15 Latest
+### Added
+- Minor textual updates and UI tweaks 
+- Enhanced security layer for the speed test feature 
+- Enhanced the system process scanning module with behavior-based detection 
+- Per-process incoming and outgoing traffic detection (suspicious connections) 
+- Per-process multi-port activity detection (suspicious connections) 
+- Command shell activity detection (potential reverse shell indicators) 
+- High-entropy binary indicators (packed or obfuscated executables) 
+
+---
+
+## [2.1.5] – 2026-03-14
 ### Added
 - IAS (Internet Authentication Service) server check
 - RRAS (Routing and Remote Access Service) server check
