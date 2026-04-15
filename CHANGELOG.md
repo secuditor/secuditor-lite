@@ -186,10 +186,10 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ## [1.9.8] – 2025-11-12
 ### Added
 - Descriptive text for toolbar buttons
-- Privacy Policy title update
+- Updated the privacy policy title
 
 ### Fixed
-- Windows Core Isolation check issue
+- Windows Core Isolation check issue fixed
 
 ---
 
