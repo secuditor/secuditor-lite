@@ -160,7 +160,7 @@ def check_secure_boot():
             return "Enabled"
         if wmi_output.lower() == "false":
             return "Disabled"
-    except:
+    except Exception:
         pass
 
     # Neither registry nor WMI worked

@@ -83,7 +83,7 @@ def get_password_policy_nonadmin():
             elif "minimum password length" in line_lower:
                 try:
                     result["Password MinLength"] = int(line.split()[-1])
-                except:
+                except Exception:
                     pass
             elif "lockout threshold" in line_lower:
                 result["Lockout Threshold"] = line.split()[-1]

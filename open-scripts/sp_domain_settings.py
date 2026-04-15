@@ -85,7 +85,7 @@ def get_domain_settings():
         try:
             role_int = int(role)
             data["Domain Role"] = role_map.get(role_int, f"Unknown ({role})")
-        except:
+        except Exception:
             data["Domain Role"] = f"Unknown ({role})"
     except Exception:
         data["Domain Role"] = "Unknown"
