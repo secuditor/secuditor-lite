@@ -39,14 +39,14 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.1.3] – 2026-03-02
-### Improvements
+### Added
 - Gateway discovery now supports dual-stack (IPv4 + IPv6)
 - Network settings check now supports dual-stack (IPv4 + IPv6)
 
 ---
 
 ## [2.1.2] – 2026-02-05
-### Improvements
+### Added
 - Minor improvement to the logging workflow
 
 ### Fixed
@@ -69,18 +69,18 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ### Added
 - Speed Test button to measure internet throughput
 - Clickable "jumps" from the summary report for quick navigation
+- Formatting optimizations in some categories
 - NTP remote server detection feature
 - WinRM remote access detection feature
 
 ### Improved
 - Updated ASCII logo
 - Updated toolbar button
-- Formatting optimizations in some categories
 
 ---
 
 ## [2.0.9] – 2026-01-24
-### Improved
+### Added
 - Minor performance optimizations
 - Reshaped some report elements output
 
@@ -89,21 +89,19 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ## [2.0.8] – 2026-01-16
 ### Added
 - Renamed the software from **Secuditor Free** to **Secuditor Lite**
-
-### Improved
 - Extended FTP server feature detection capabilities
 
 ---
 
 ## [2.0.7] – 2026-01-10
-### Improved
+### Added
 - Updated the main report and console window visuals
 - Enhanced the sensitive path scan module
 
 ---
 
 ## [2.0.6] – 2026-01-07
-### Improved
+### Added
 - VPN connection detection module enhanced for better accuracy
 
 ### Fixed
@@ -142,7 +140,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.0.2] – 2025-12-20
-### Improved
+### Added
 - Redesigned main screen visuals
 - Optimized threat intelligence processing
 
@@ -179,23 +177,19 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ## [1.9.9] – 2025-11-21
 ### Fixed
-- Network Gateway report issue
-- SSL/TLS interception bug
-
-### Improved
+- Network Gateway report issue resolved
+- SSL/TLS interception bug fixed
 - Secure Boot module now runs without requiring administrative privileges
 
 ---
 
 ## [1.9.8] – 2025-11-12
 ### Added
-- Descriptive text to buttons
+- Descriptive text for toolbar buttons
+- Privacy Policy title update
 
 ### Fixed
 - Windows Core Isolation check issue
-
-### Changed
-- Privacy Policy title update
 
 ---
 
