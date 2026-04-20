@@ -46,11 +46,9 @@ Your use of those components is subject to their respective licenses. Copies of 
 Third-party components included:
 - Python (Python Software Foundation License)
 - pywin32 (MIT License)
-- packaging (BSD 2-Clause License)
 - WMI (Python WMI library)
 - Requests (Apache License 2.0)
 - psutil (BSD License)
-- dnspython (ISC License)
 - cryptography (Apache License 2.0 / BSD)
 - Pillow (HPND License)
 - Tcl/Tk via Tkinter (BSD-style License)
