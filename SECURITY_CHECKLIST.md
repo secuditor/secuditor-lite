@@ -52,7 +52,8 @@ This file lists the structured and comprehensive security audit elements that **
 - Antivirus / endpoint protection status  
 - Firewall configuration and activity  
 - User Account Control (UAC) settings  
-- Core isolation and memory protection  
+- Core isolation and memory protection
+- Attack Surface Reduction (ASR) rules
 - PowerShell execution policy
 - EFS encryption protocol usage  
 - Disk encryption (BitLocker) status  
@@ -86,7 +87,8 @@ This file lists the structured and comprehensive security audit elements that **
 - Credential storage mechanisms (WDigest)  
 - Credential Guard support and status  
 - LSASS protection (RunAsPPL) configuration  
-- Signature validation of security processes  
+- Signature validation of security processes
+- Local credential SAM hive access
 
 ---
 
