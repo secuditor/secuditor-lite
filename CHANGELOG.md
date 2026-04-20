@@ -3,7 +3,20 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.1.6] – 2026-04-15 Latest
+## [2.1.7] – 2026-04-20 Latest
+### Added
+- Local credential hive access check (Credential Integrity)
+- Microsoft Defender Attack Surface Reduction (ASR) rules check
+
+### Changed
+- Renamed "Persistence" category to "Detection"
+- Removed Remote Assistance from summary
+- Removed unused dependency: dns.resolver
+- Removed unused import: packaging.version
+
+---
+
+## [2.1.6] – 2026-04-15
 ### Added
 - Minor textual updates and UI tweaks 
 - Enhanced security layer for the speed test feature 
