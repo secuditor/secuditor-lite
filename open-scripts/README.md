@@ -12,7 +12,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 
 ---
 
-## Module Index
+## The Modules
 
 - [sp_credential_integrity.py](sp_credential_integrity.py) – Audits Windows credential protection mechanisms
 - [sp_domain_settings.py](sp_domain_settings.py) – Identifies domain affiliation and discovers related settings
