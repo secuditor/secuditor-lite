@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menny Levinski
+# MIT License – Copyright (c) 2025 Menahem Levinski
 
 """
 Calculates cryptographic file hashes for integrity verification.
