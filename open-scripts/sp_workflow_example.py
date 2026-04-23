@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menny Levinski
+# MIT License – Copyright (c) 2025 Menahem Levinski
 
 """
 This is only a demo program, not a real app.
