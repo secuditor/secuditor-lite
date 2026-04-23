@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2025 Menny Levinski
+Copyright (c) 2025 Menahem Levinski
 
 This license applies only to the contents of this directory (open-scripts).
 
