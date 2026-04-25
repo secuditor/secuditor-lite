@@ -161,24 +161,6 @@ A collection of standalone Python modules developed as part of the **Secuditor p
 
 The tool **Secuditor Lite** is distributed in its complete form as a closed source freeware to ensure secure design and code integrity which require a controlled and confidential development environment.
 
-### The Modules
-
-- [sp_credential_integrity.py](open-scripts/sp_credential_integrity.py) – Audits Windows credential protection mechanisms
-- [sp_domain_settings.py](open-scripts/sp_domain_settings.py) – Identifies domain affiliation and discovers related settings
-- [sp_gateway_detection.py](open-scripts/sp_gateway_detection.py) – Detects the local network's default gateway and public IP
-- [sp_hash_checksum.py](open-scripts/sp_hash_checksum.py) – Calculates cryptographic file hashes for integrity verification
-- [sp_https_scanner.py](open-scripts/sp_https_scanner.py) - Mini HTTPS security scanner for basic inspection (port 443 only)
-- [sp_installed_apps.py](open-scripts/sp_installed_apps.py) – Outputs a list of applications installed on the device
-- [sp_network_settings.py](open-scripts/sp_network_settings.py) – Presents the device's network adapters and configurations
-- [sp_password_policy.py](open-scripts/sp_password_policy.py) – Evaluates local and domain affiliated password policies
-- [sp_remote_access.py](open-scripts/sp_remote_access.py) – Detects remote access capabilities and services exposure
-- [sp_remote_server.py](open-scripts/sp_remote_server.py) – Inspects the system for server side remote features
-- [sp_security_events.py](open-scripts/sp_security_events.py) – Outputs recent Windows security event log entries (requires admin permissions)
-- [sp_security_settings.py](open-scripts/sp_security_settings.py) – Reviews core Windows security posture settings
-- [sp_shared_folders.py](open-scripts/sp_shared_folders.py) – Mapping shared folders on the device (requires admin permissions)
-- [sp_system_audit.py](open-scripts/sp_system_audit.py) – Presents a detailed report of the system's settings and inventory
-- [sp_workflow_example.py](open-scripts/sp_workflow_example.py) – An example module demonstrating audit workflow and logging 
-
 ---
 <br>
 
@@ -188,6 +170,7 @@ The tool **Secuditor Lite** is distributed in its complete form as a closed sour
 
 - **[Changelog](CHANGELOG.md)**
 - **[Contributing](CONTRIBUTING.md)**
+- **[Security Policy](SECURITY.md)**
 - **[Software License](LICENSE.txt)**
 - **[Third Party Licenses](THIRD_PARTY_LICENSES.txt)**
 <br>
