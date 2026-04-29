@@ -56,8 +56,10 @@ This file lists the structured and comprehensive security audit elements that **
 - Attack Surface Reduction (ASR) rules
 - PowerShell execution policy
 - EFS encryption protocol usage  
-- Disk encryption (BitLocker) status  
-- Removable storage detection  
+- Disk encryption (BitLocker) status
+- Office Macro Security Policy  
+- Removable storage Status  
+- USB Autorun configuration  
 - Secure Boot configuration  
 - System restore availability  
 
@@ -119,9 +121,9 @@ This file lists the structured and comprehensive security audit elements that **
 ---
 
 ### 💾 Sensitive Data Exposure
-- Detection of sensitive system files (SAM, SECURITY, etc.)  
-- Identification of potentially exposed database files  
-- Risk assessment of critical system paths  
+- Detection of sensitive system files (*.dit, *.ldf, *.mdf, *.ndf, *.edb, *.ad, etc)  
+- Identification of potentially exposed database files (*.sqlite, *.sqlite3, *.db, *.ibd, *.myd, *.myi, etc)  
+- Risk assessment of critical system paths (high / low risk)  
 
 ---
 
