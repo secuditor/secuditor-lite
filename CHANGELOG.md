@@ -86,7 +86,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - NTP remote server detection feature
 - WinRM remote access detection feature
 
-### Improved
+### Changed
 - Updated ASCII logo
 - Updated toolbar button
 
@@ -129,7 +129,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - WINS server feature check
 - MSMQ server feature check
 
-### Improved
+### Changed
 - Password policy history check enhanced
 - Replaced toolbar icon with a new design
 - Updated main window features description
