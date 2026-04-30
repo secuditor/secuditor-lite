@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2025 Menny Levinski
 
 """
 Detects remote access capabilities and services exposure.
@@ -168,7 +168,7 @@ def get_remote_access_settings():
         "Telnet Service": "Unknown",
         "Bluetooth": "Unknown",
         "NetBIOS": "Unknown",
-        "UPnP": "Unknown",
+        "UPnPHost": "Unknown",
         "WinRM": "Unknown",
         "SMB1": "Unknown",
         "SMB2": "Unknown",
@@ -563,7 +563,7 @@ def get_remote_access_settings():
     except Exception:
         result["Telnet Service"] = "Unknown"
 
-    # --- UPnP Service ---
+    # --- UPnPHost Service ---
     try:
         services_to_check = ["upnphost"]  # UPnP Device Host is the real server part
         running = False
@@ -586,12 +586,12 @@ def get_remote_access_settings():
                 continue
 
         if not installed:
-            result["UPnP"] = "Disabled"
+            result["UPnPHost"] = "Disabled"
         else:
-            result["UPnP"] = "Enabled" if running else "Disabled"
+            result["UPnPHost"] = "Enabled" if running else "Disabled"
 
     except Exception:
-        result["UPnP"] = "Unknown"
+        result["UPnPHost"] = "Unknown"
     
     # --- WinRM ---
     winrm_data = audit_winrm()         # run full WinRM audit

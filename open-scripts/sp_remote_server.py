@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2025 Menny Levinski
 
 """
 Inspects the system for server side remote features.
@@ -46,38 +46,36 @@ def get_remote_server_settings():
     # --- DHCP Server ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service DHCPServer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service DHCPServer -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True, encoding="utf-8"
         ).strip()
         if output.lower() == "running":
             result["DHCP"] = "Enabled"
         elif output.lower() == "stopped":
             result["DHCP"] = "Disabled"
-        elif output == "":
-            result["DHCP"] = "No Server / Disabled"
         else:
             result["DHCP"] = output or "Unknown"
+        
     except subprocess.CalledProcessError:
-        result["DHCP"] = "No Server / Disabled"
+        result["DHCP"] = "Not Installed"
     except Exception:
         result["DHCP"] = "Unknown"
 
     # --- DNS Server ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service DNS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service DNS -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True, encoding="utf-8"
         ).strip()
         if output.lower() == "running":
             result["DNS"] = "Enabled"
         elif output.lower() == "stopped":
             result["DNS"] = "Disabled"
-        elif output == "":
-            result["DNS"] = "No Server / Disabled"
         else:
             result["DNS"] = output or "Unknown"
+        
     except subprocess.CalledProcessError:
-        result["DNS"] = "No Server / Disabled"
+        result["DNS"] = "Not Installed"
     except Exception:
         result["DNS"] = "Unknown"
 
@@ -108,8 +106,6 @@ def get_remote_server_settings():
             if svc.get("Status") == "Running":
                 ftp_found = True
 
-            output = _run(["sc", "qc", "w32time"])
-
         # --- 2. Check listening FTP / FTPS ports ---
         if not ftp_found:
             netstat = subprocess.check_output(
@@ -137,7 +133,7 @@ def get_remote_server_settings():
         if ftp_found:
             result["FTP"] = "Enabled"
         else:
-            result["FTP"] = "No Server / Disabled"
+            result["FTP"] = "Not Installed"
 
     except Exception:
         result["FTP"] = "Unknown"
@@ -147,7 +143,7 @@ def get_remote_server_settings():
         output = _run(["sc", "qc", "w32time"])
         
         if "SERVICE_NAME" not in output:
-            result["NTP"] = "No Server / Disabled"
+            result["NTP"] = "Not Installed"
         elif "DISABLED" in output:
             result["NTP"] = "Disabled"
         else:
@@ -178,7 +174,7 @@ def get_remote_server_settings():
         ).upper()
 
         if "FAILED 1060" in output:
-            result["IIS"] = "No Server / Disabled"
+            result["IIS"] = "Not Installed"
         elif "STATE" in output:
             if "RUNNING" in output:
                 # check port 80 binding
@@ -195,11 +191,11 @@ def get_remote_server_settings():
             else:
                 result["IIS"] = "Disabled"
         else:
-            result["IIS"] = "No Server / Disabled"
+            result["IIS"] = "Not Installed"
 
     except subprocess.CalledProcessError as e:
         if "1060" in str(e.output):
-            result["IIS"] = "No Server / Disabled"
+            result["IIS"] = "Not Installed"
         else:
             result["IIS"] = "Unknown"
     except Exception:
@@ -208,19 +204,18 @@ def get_remote_server_settings():
     # --- SSH ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service sshd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service sshd -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True
         ).strip()
         if output == "Running":
             result["SSH"] = "Enabled"
         elif output == "Stopped":
             result["SSH"] = "Disabled"
-        elif output == "":
-            result["SSH"] = "No Server / Disabled"
         else:
             result["SSH"] = output or "Unknown"
+            
     except subprocess.CalledProcessError:
-        result["SSH"] = "No Server / Disabled"
+        result["SSH"] = "Not Installed"
     except Exception:
         result["SSH"] = "Unknown"
 
@@ -234,7 +229,7 @@ def get_remote_server_settings():
     for proto, info in email_services.items():
         try:
             output = subprocess.check_output(
-                f'powershell -Command "Get-Service {info["service"]} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+                f'powershell -Command "Get-Service {info["service"]} -ErrorAction Stop | Select-Object -ExpandProperty Status"',
                 shell=True, text=True
             ).strip()
             if output.lower() == "running":
@@ -242,7 +237,7 @@ def get_remote_server_settings():
             elif output.lower() == "stopped":
                 result[proto] = "Disabled"
             elif output == "":
-                result[proto] = "No Server / Disabled"
+                result[proto] = "Not Installed"
             else:
                 result[proto] = output or "Unknown"
 
@@ -259,7 +254,7 @@ def get_remote_server_settings():
             except Exception:
                 pass
         except subprocess.CalledProcessError:
-            result[proto] = "No Server / Disabled"
+            result[proto] = "Not Installed"
         except Exception:
             result[proto] = "Unknown"
 
@@ -267,7 +262,7 @@ def get_remote_server_settings():
     try:
         cmd = (
             'powershell -Command '
-            '"Get-Service NTDS -ErrorAction SilentlyContinue | '
+            '"Get-Service NTDS -ErrorAction Stop | '
             'Select-Object -ExpandProperty Status"'
         )
         output = subprocess.check_output(cmd, shell=True, text=True, encoding="utf-8").strip()
@@ -276,51 +271,46 @@ def get_remote_server_settings():
             result["LDAP"] = "Enabled"
         elif output.lower() == "stopped":
             result["LDAP"] = "Disabled"
-        elif output == "":
-            result["LDAP"] = "No Server / Disabled"
         else:
             result["LDAP"] = output or "Unknown"
 
     except subprocess.CalledProcessError:
-        result["LDAP"] = "No Server / Disabled"
+        result["LDAP"] = "Not Installed"
     except Exception:
         result["LDAP"] = "Unknown"
 
     # --- TlntSvr ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service TlntSvr -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service TlntSvr -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True
         ).strip()
         if output == "Running":
             result["TlntSvr"] = "Enabled"
         elif output == "Stopped":
             result["TlntSvr"] = "Disabled"
-        elif output == "":
-            result["TlntSvr"] = "No Server / Disabled"
         else:
             result["TlntSvr"] = output or "Unknown"
+            
     except subprocess.CalledProcessError:
-        result["TlntSvr"] = "No Server / Disabled"
+        result["TlntSvr"] = "Not Installed"
     except Exception:
         result["TlntSvr"] = "Unknown"
 
     # --- SNMP ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service SNMP -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service SNMP -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True
         ).strip()
         if output == "Running":
             result["SNMP"] = "Enabled"
         elif output == "Stopped":
             result["SNMP"] = "Disabled"
-        elif output == "":
-            result["SNMP"] = "No Server / Disabled"
         else:
             result["SNMP"] = output or "Unknown"
     except subprocess.CalledProcessError:
-        result["SNMP"] = "No Server / Disabled"
+        result["SNMP"] = "Not Installed"
     except Exception:
         result["SNMP"] = "Unknown"
 
@@ -334,18 +324,18 @@ def get_remote_server_settings():
         ).upper()
 
         if "FAILED 1060" in output or "DOES NOT EXIST" in output:
-            result["PKI"] = "No Server / Disabled"
+            result["PKI"] = "Not Installed"
         elif "STATE" in output:
             if "RUNNING" in output:
                 result["PKI"] = "Enabled"
             else:
                 result["PKI"] = "Disabled"
         else:
-            result["PKI"] = "No Server / Disabled"
+            result["PKI"] = "Not Installed"
 
     except subprocess.CalledProcessError as e:
         if "1060" in str(e.output):
-            result["PKI"] = "No Server / Disabled"
+            result["PKI"] = "Not Installed"
         else:
             result["PKI"] = "Unknown"
     except Exception:
@@ -353,20 +343,18 @@ def get_remote_server_settings():
 
     # --- DFSR service ---
     try:
-        cmd = 'powershell -Command "Get-Service DFSR -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"'
+        cmd = 'powershell -Command "Get-Service DFSR -ErrorAction Stop | Select-Object -ExpandProperty Status"'
         output = subprocess.check_output(cmd, shell=True, text=True, encoding="utf-8").strip()
 
         if output.lower() == "running":
             result["DFSR"] = "Enabled"
         elif output.lower() == "stopped":
             result["DFSR"] = "Disabled"
-        elif output == "":
-            result["DFSR"] = "No Server / Disabled"
         else:
             result["DFSR"] = output or "Unknown"
 
     except subprocess.CalledProcessError:
-        result["DFSR"] = "No Server / Disabled"
+        result["DFSR"] = "Not Installed"
     except Exception:
         result["DFSR"] = "Unknown"
 
@@ -395,7 +383,7 @@ def get_remote_server_settings():
                     instances.append(svc)
 
         if not instances:
-            result["SQLDB"] = "No Server / Disabled"
+            result["SQLDB"] = "Not Installed"
         else:
             running = False
 
@@ -426,7 +414,7 @@ def get_remote_server_settings():
     # --- MSMQ (Message Queuing) ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service MSMQ -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service MSMQ -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True, encoding="utf-8"
         ).strip()
 
@@ -434,20 +422,18 @@ def get_remote_server_settings():
             result["MSMQ"] = "Enabled"
         elif output.lower() == "stopped":
             result["MSMQ"] = "Disabled"
-        elif output == "":
-            result["MSMQ"] = "No Server / Disabled"
         else:
             result["MSMQ"] = output or "Unknown"
 
     except subprocess.CalledProcessError:
-        result["MSMQ"] = "No Server / Disabled"
+        result["MSMQ"] = "Not Installed"
     except Exception:
         result["MSMQ"] = "Unknown"
 
     # --- RRAS (Routing and Remote Access Service) ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service RemoteAccess -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service RemoteAccess -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True, text=True, encoding="utf-8"
         ).strip()
 
@@ -455,20 +441,18 @@ def get_remote_server_settings():
             result["RRAS"] = "Enabled"
         elif output.lower() == "stopped":
             result["RRAS"] = "Disabled"
-        elif output == "":
-            result["RRAS"] = "No Server / Disabled"
         else:
             result["RRAS"] = output or "Unknown"
 
     except subprocess.CalledProcessError:
-        result["RRAS"] = "No Server / Disabled"
+        result["RRAS"] = "Not Installed"
     except Exception:
         result["RRAS"] = "Unknown"
 
     # --- IAS (Internet Authentication Service) ---
     try:
         output = subprocess.check_output(
-            'powershell -Command "Get-Service IAS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"',
+            'powershell -Command "Get-Service IAS -ErrorAction Stop | Select-Object -ExpandProperty Status"',
             shell=True,
             text=True,
             encoding="utf-8"
@@ -478,13 +462,11 @@ def get_remote_server_settings():
             result["IAS"] = "Enabled"
         elif output.lower() == "stopped":
             result["IAS"] = "Disabled"
-        elif output == "":
-            result["IAS"] = "No Server / Disabled"
         else:
             result["IAS"] = output or "Unknown"
 
     except subprocess.CalledProcessError:
-        result["IAS"] = "No Server / Disabled"
+        result["IAS"] = "Not Installed"
     except Exception:
         result["IAS"] = "Unknown"
 
@@ -522,7 +504,7 @@ def get_remote_server_settings():
                     instances.append(svc)
 
         if not instances:
-            result["VMMS"] = "No Server / Disabled"
+            result["VMMS"] = "Not Installed"
         else:
             running = False
             for inst in instances:

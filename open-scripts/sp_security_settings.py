@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2025 Menny Levinski
 
 """
 Reviews core Windows security posture settings.
@@ -204,7 +204,8 @@ def get_security_settings():
         "Endpoint Protection": [],
         "Local Firewall": "Unknown",
         "ASR Rules": "Unknown",
-        "EFS Usage": "Unknown",
+        "Encrypted File System": "Unknown",
+        "Office Macro Policy": "Unknown",
         "PATH Variables": "Unknown",
         "UAC Elevation": "Unknown",
         "Core Isolation": "Unknown",
@@ -212,6 +213,7 @@ def get_security_settings():
         "BitLocker": "Unknown",
         "Secure Boot": "Unknown",
         "Removable Storage": "Unknown",
+        "USB AutoRun": "Unknown",
         "System Restore": "Unknown",
     }
 
@@ -395,6 +397,55 @@ def get_security_settings():
     except Exception:
         result["PATH Variables"] = "Unknown"
 
+    # --- Macro Security ---
+    try:
+        def read_reg(root, path, name):
+            try:
+                with winreg.OpenKey(root, path) as key:
+                    value, _ = winreg.QueryValueEx(key, name)
+                    return value
+            except FileNotFoundError:
+                return None
+            except Exception:
+                return None
+
+        def get_macro_security_summary():
+            results = []
+
+            # Office macro policy (All Office apps - common baseline)
+            macro_policy_path = r"Software\Microsoft\Office\16.0\Word\Security"
+            macro_value = read_reg(
+                winreg.HKEY_CURRENT_USER,
+                macro_policy_path,
+                "VBAWarnings"
+            )
+
+            # VBAWarnings meanings:
+            # 4 = Disable all macros without notification (most secure)
+            # 3 = Disable with notification
+            # 2 = Enable macros (unsafe)
+            # None = not configured (defaults apply)
+
+            if macro_value is None:
+                macro_status = "Default (System Controlled)"
+            elif macro_value == 4:
+                macro_status = "Disabled (No Macros)"
+            elif macro_value == 3:
+                macro_status = "Disabled with Notification"
+            elif macro_value == 2:
+                macro_status = "Enabled (Unsafe)"
+            else:
+                macro_status = f"Unknown ({macro_value})"
+
+            results.append(f"{macro_status}")
+
+            return results
+
+        result["Office Macro Policy"] = get_macro_security_summary()
+
+    except Exception:
+        result["Office Macro Policy"] = "Unknown"
+
     # --- PowerShell Scripts ---
     try:
         cmd = 'powershell -NoProfile -Command "Get-ExecutionPolicy"'
@@ -419,15 +470,67 @@ def get_security_settings():
     # --- Secure Boot ---
     result["Secure Boot"] = check_secure_boot()
 
-    # --- Removable Storage (USB / CD/DVD) ---
+    # --- Removable Storage ---
     try:
-        removable = get_removable_storage()
-        if isinstance(removable, list):
-            result["Removable Storage"] = ", ".join(removable)
-        else:
-            result["Removable Storage"] = removable
+        def read_reg(root, path, name):
+            try:
+                with winreg.OpenKey(root, path) as key:
+                    value, _ = winreg.QueryValueEx(key, name)
+                    return value
+            except FileNotFoundError:
+                return None
+            except Exception:
+                return None
+
+        def get_removable_storage():
+            usb_value = read_reg(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Services\USBSTOR",
+                "Start"
+            )
+
+            if usb_value is None:
+                return "Unknown"
+            elif usb_value == 4:
+                return "Disabled"
+            else:
+                return "Enabled"
+
+        result["Removable Storage"] = get_removable_storage()
+
     except Exception:
         result["Removable Storage"] = "Unknown"
+
+    # --- USB AutoRun ---
+    try:
+        def read_reg(root, path, name):
+            try:
+                with winreg.OpenKey(root, path) as key:
+                    value, _ = winreg.QueryValueEx(key, name)
+                    return value
+            except FileNotFoundError:
+                return None
+            except Exception:
+                return None
+
+        def get_usb_autorun():
+            autorun_value = read_reg(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer",
+                "NoDriveTypeAutoRun"
+            )
+
+            if autorun_value is None:
+                return "Default"
+            elif autorun_value == 255:
+                return "Disabled"
+            else:
+                return "Partially Disabled"
+
+        result["USB AutoRun"] = get_usb_autorun()
+
+    except Exception:
+        result["USB AutoRun"] = "Unknown"
 
     # --- EFS Usage ---
     try:
