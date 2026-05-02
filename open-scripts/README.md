@@ -14,6 +14,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 
 ## The Modules
 
+- [sp_check_network.py](sp_check_network.py) – Checks internet connectivity, ISP, geolocation, and VPN status
 - [sp_credential_integrity.py](sp_credential_integrity.py) – Audits Windows credential protection mechanisms
 - [sp_domain_settings.py](sp_domain_settings.py) – Identifies domain affiliation and discovers related settings
 - [sp_gateway_detection.py](sp_gateway_detection.py) – Detects the local network's default gateway and public IP
