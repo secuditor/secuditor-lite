@@ -1,5 +1,9 @@
 # MIT License – Copyright (c) 2025 Menahem Levinski
 
+'''
+Checks internet connectivity, ISP, geolocation, and VPN status
+'''
+
 import requests
 import ipaddress
 import socket
