@@ -33,8 +33,8 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Minor textual updates and UI tweaks 
 - Enhanced security layer for the speed test feature 
 - Enhanced the system process scanning module with behavior-based detection 
-- Incoming and outgoing traffic detection per-process (suspicious connections) 
-- Multi-port activity detection per-process (suspicious connections) 
+- Incoming and outgoing traffic detection per-process (Suspicious Connections) 
+- Multi-port activity detection per-process (Suspicious Connections) 
 - Command shell activity detection (potential reverse shell indicators) 
 - High-entropy binary indicators (packed or obfuscated executables) 
 
