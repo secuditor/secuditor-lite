@@ -15,6 +15,36 @@ import string
 import winreg
 import psutil
 import datetime
+import threading
+import itertools
+import time
+
+def running_in_idle():
+    return "idlelib" in sys.modules
+
+# --- Dots worker ---
+class Spinner:
+    """Simple console spinner/dots animation in a separate thread."""
+    def __init__(self, message: str = "Working"):
+        self.message = message
+        self._stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        for dots in itertools.cycle(["", ".", "..", "...", "....", "....."]):
+            if self._stop_event.is_set():
+                break
+            print(f"\r{self.message}{dots}   ", end="", flush=True)
+            time.sleep(0.5)
+            
+        print("\r" + " " * (len(self.message) + 10) + "\r", end="", flush=True)
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        self.thread.join()
 
 # --- Helper ---
 def _run(cmd):
@@ -166,7 +196,7 @@ def check_secure_boot():
     # Neither registry nor WMI worked
     return "Unsupported"
 
-# --- Helper: detect local firewall ---
+# --- Helper: detect Host-based Firewall ---
 def firewall_managed_by_safe():
     """
     Detects which product (if any) is managing Windows Firewall.
@@ -202,8 +232,8 @@ def get_security_settings():
     result = {
         "Windows Defender": [],
         "Endpoint Protection": [],
-        "Local Firewall": "Unknown",
-        "ASR Rules": "Unknown",
+        "Host-based Firewall": "Unknown",
+        "Defender ASR Rules": "Unknown",
         "Encrypted File System": "Unknown",
         "Office Macro Policy": "Unknown",
         "PATH Variables": "Unknown",
@@ -250,7 +280,7 @@ def get_security_settings():
     except Exception:
         pass
 
-    # --- Local Firewall (safe, no WMI / SecurityCenter2) ---
+    # --- Host-based Firewall (safe, no WMI / SecurityCenter2) ---
     try:
         # Detect controller
         fw_info = firewall_managed_by_safe()
@@ -278,10 +308,10 @@ def get_security_settings():
         else:
             status = "Off"
 
-        result["Local Firewall"] = f"{controller} ({status})"
+        result["Host-based Firewall"] = f"{controller} ({status})"
 
     except Exception:
-        result["Local Firewall"] = "Unknown"
+        result["Host-based Firewall"] = "Unknown"
 
     # --- ASR ---
     try:
@@ -290,7 +320,7 @@ def get_security_settings():
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
         except FileNotFoundError:
-            result["ASR Rules"] = "Not Configured"
+            result["Defender ASR Rules"] = "Not Configured"
             key = None
 
         rules = {}
@@ -308,19 +338,19 @@ def get_security_settings():
                 winreg.CloseKey(key)
 
         if not rules:
-            result["ASR Rules"] = "Not Configured"
+            result["Defender ASR Rules"] = "Not Configured"
         else:
             enabled = sum(1 for v in rules.values() if v == 1)
             audit = sum(1 for v in rules.values() if v == 2)
             disabled = sum(1 for v in rules.values() if v == 0)
 
-            result["ASR Rules"] = (
+            result["Defender ASR Rules"] = (
                 f"Configured ({len(rules)} rules) | "
                 f"Block: {enabled}, Audit: {audit}, Disabled: {disabled}"
             )
 
     except Exception:
-        result["ASR Rules"] = "Unknown"
+        result["Defender ASR Rules"] = "Unknown"
     
     # --- UAC ---
     try:
@@ -547,9 +577,9 @@ def get_security_settings():
                     continue
             if efs_found:
                 break
-        result["EFS Usage"] = "Encrypted files found" if efs_found else "No encrypted files"
+        result["Encrypted File System"] = "Encrypted files found" if efs_found else "No encrypted files"
     except Exception:
-        result["EFS Usage"] = "Unknown"
+        result["Encrypted File System"] = "Unknown"
 
     return format_security_settings(result)
 
@@ -583,7 +613,18 @@ def format_security_settings(settings):
 if __name__ == "__main__":
     print("Security Settings Report")
     print("–" * len("Security Settings Report"))
-    print(get_security_settings())
-    print("")
 
+    if running_in_idle():
+        print("Working... (please wait)")
+        report = get_security_settings()
+    else:
+        spinner = Spinner("Working")
+        spinner.start()
+        try:
+            report = get_security_settings()
+        finally:
+            spinner.stop()
+
+    print(report)
+    print("")
     os.system("pause")

@@ -5,10 +5,41 @@ Detects remote access capabilities and services exposure.
 """
 
 import os
+import sys
 import subprocess
 import winreg
 import json
 import socket
+import threading
+import itertools
+import time
+
+def running_in_idle():
+    return "idlelib" in sys.modules
+
+# --- Dots worker ---
+class Spinner:
+    """Simple console spinner/dots animation in a separate thread."""
+    def __init__(self, message: str = "Working"):
+        self.message = message
+        self._stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        for dots in itertools.cycle(["", ".", "..", "...", "....", "....."]):
+            if self._stop_event.is_set():
+                break
+            print(f"\r{self.message}{dots}   ", end="", flush=True)
+            time.sleep(0.5)
+            
+        print("\r" + " " * (len(self.message) + 10) + "\r", end="", flush=True)
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        self.thread.join()
 
 # --- Helper ---
 def _run(cmd):
@@ -163,7 +194,7 @@ def get_remote_access_settings():
         "Remote Assistance": "Unknown",
         "PowerShell Remoting": "Unknown",
         "COM Network Service": "Unknown",        
-        "RPC Print Service": "Unknown",
+        "RPC Print Spooler": "Unknown",
         "Rsync Service": "Unknown",
         "Telnet Service": "Unknown",
         "Bluetooth": "Unknown",
@@ -475,9 +506,9 @@ def get_remote_access_settings():
     except Exception:
         result["PowerShell Remoting"] = "Unknown"
 
-    # --- RPC Print Service ---
+    # --- RPC Print Spooler ---
     try:
-        # Check if RPC Print Service key exists
+        # Check if RPC Print Spooler key exists
         check_rpc = subprocess.run(
             'powershell -Command "Test-Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Print\\RpcEnabled"',
             shell=True, text=True, capture_output=True
@@ -520,10 +551,10 @@ def get_remote_access_settings():
         else:
             verdict = "Disabled"
 
-        result["RPC Print Service"] = verdict
+        result["RPC Print Spooler"] = verdict
 
     except Exception:
-        result["RPC Print Service"] = "Unknown"
+        result["RPC Print Spooler"] = "Unknown"
 
     # --- Rsync Service ---
     try:
@@ -532,9 +563,9 @@ def get_remote_access_settings():
             shell=True, text=True
         ).strip()
         if output == "Running":
-            result["Rsync Service"] = "Enabled"
+            result["Rsync Service"] = "Running"
         elif output == "Stopped":
-            result["Rsync Service"] = "Disabled"
+            result["Rsync Service"] = "Stopped"
         elif output == "":
             result["Rsync Service"] = "Disabled"
         else:
@@ -551,9 +582,9 @@ def get_remote_access_settings():
             shell=True, text=True
         ).strip()
         if output == "Running":
-            result["Telnet Service"] = "Enabled"
+            result["Telnet Service"] = "Running"
         elif output == "Stopped":
-            result["Telnet Service"] = "Disabled"
+            result["Telnet Service"] = "Stopped"
         elif output == "":
             result["Telnet Service"] = "Disabled"
         else:
@@ -563,7 +594,7 @@ def get_remote_access_settings():
     except Exception:
         result["Telnet Service"] = "Unknown"
 
-    # --- UPnPHost Service ---
+    # --- UPnP Service ---
     try:
         services_to_check = ["upnphost"]  # UPnP Device Host is the real server part
         running = False
@@ -588,7 +619,7 @@ def get_remote_access_settings():
         if not installed:
             result["UPnPHost"] = "Disabled"
         else:
-            result["UPnPHost"] = "Enabled" if running else "Disabled"
+            result["UPnPHost"] = "Running" if running else "Stopped"
 
     except Exception:
         result["UPnPHost"] = "Unknown"
@@ -615,7 +646,20 @@ def format_remote_access_settings(settings):
 if __name__ == "__main__":
     print("Remote Access Report")
     print("–" * len("Remote Access Report"))
-    print(get_remote_access_settings())
-    print("")
+    
+    if running_in_idle():
+        print("Working... (please wait)")
+        report = get_remote_access_settings()
+    else:
+        spinner = Spinner("Working")
+        spinner.start()
+        try:
+            report = get_remote_access_settings()
+        finally:
+            spinner.stop()
 
+    print(report)
+    print("")
     os.system("pause")
+
+

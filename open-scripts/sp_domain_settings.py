@@ -5,11 +5,42 @@ Identifies domain affiliation and discovers related settings.
 """
 
 import os
+import sys
 import re
 import subprocess
 import socket
 import getpass
 import winreg
+import threading
+import itertools
+import time
+
+def running_in_idle():
+    return "idlelib" in sys.modules
+
+# --- Dots worker ---
+class Spinner:
+    """Simple console spinner/dots animation in a separate thread."""
+    def __init__(self, message: str = "Working"):
+        self.message = message
+        self._stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        for dots in itertools.cycle(["", ".", "..", "...", "....", "....."]):
+            if self._stop_event.is_set():
+                break
+            print(f"\r{self.message}{dots}   ", end="", flush=True)
+            time.sleep(0.5)
+            
+        print("\r" + " " * (len(self.message) + 10) + "\r", end="", flush=True)
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        self.thread.join()
 
 # --- Domain/workgroup info ---
 def _check_laps():
@@ -52,19 +83,52 @@ def get_domain_settings():
         "Regular Users": []
     }
 
+    # --- Azure AD / Entra ID detection (add-on, non-invasive) ---
+    try:
+        output = subprocess.check_output(
+            "dsregcmd /status",
+            shell=True,
+            text=True,
+            errors="ignore"
+        )
+
+        azure_joined = "AzureAdJoined : YES" in output
+        domain_joined = "DomainJoined : YES" in output
+
+        if azure_joined and domain_joined:
+            data["Type"] = "Hybrid Azure AD"
+        elif azure_joined:
+            data["Type"] = "Azure AD"
+        elif domain_joined:
+            data["Type"] = "Domain"
+    except Exception:
+        pass
+
     # --- Domain / Workgroup detection ---
     try:
-        output = subprocess.check_output("wmic computersystem get domain", shell=True, text=True)
+        output = subprocess.check_output(
+            "wmic computersystem get domain",
+            shell=True,
+            text=True
+        )
+
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if len(lines) > 1:
             domain_name = lines[1]
             computer_name = data["Hostname"]
-            if domain_name.upper() == "WORKGROUP":
+
+            # DO NOT override Azure AD / Hybrid detection
+            if data["Type"] in ["Azure AD", "Hybrid Azure AD"]:
+                pass
+
+            elif domain_name.upper() == "WORKGROUP":
                 data["Type"] = "Workgroup"
                 data["Name"] = domain_name
+
             elif domain_name.upper() != computer_name.upper():
                 data["Type"] = "Domain"
                 data["Name"] = domain_name
+
     except Exception:
         pass
 
@@ -230,8 +294,18 @@ def check_ntlm_policy():
 if __name__ == "__main__":
     print("Domain Settings Report")
     print("–" * len("Domain Settings Report"))
-    print(get_domain_settings())
-    print("")
 
+    if running_in_idle():
+        print("Working... (please wait)")
+        report = get_domain_settings()
+    else:
+        spinner = Spinner("Working")
+        spinner.start()
+        try:
+            report = get_domain_settings()
+        finally:
+            spinner.stop()
+
+    print(report)
+    print("")
     os.system("pause")
-    

@@ -28,7 +28,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 - [sp_security_events.py](sp_security_events.py) – Outputs recent Windows security event log entries (requires admin permissions)
 - [sp_security_settings.py](sp_security_settings.py) – Reviews core Windows security posture settings
 - [sp_shared_folders.py](sp_shared_folders.py) – Mapping shared folders on the device (requires admin permissions)
-- [sp_system_audit.py](sp_system_audit.py) – Presents a detailed report of the system's settings and inventory
+- [sp_system_settings.py](sp_system_settings.py) – Presents a detailed report of the system's settings and inventory
 - [sp_workflow_example.py](sp_workflow_example.py) – An example module demonstrating audit workflow and logging 
 
 ---
