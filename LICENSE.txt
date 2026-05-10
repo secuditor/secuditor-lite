@@ -50,9 +50,8 @@ Third-party components included:
 - Requests (Apache License 2.0)
 - psutil (BSD License)
 - cryptography (Apache License 2.0 / BSD)
-- Pillow (HPND License)
 - Tcl/Tk via Tkinter (BSD-style License)
-- Freepik (UI Buttons) icons by @user915206 (Freepik Free License, attribution required)
+- Freepik (UI Buttons) icons by @user915206 (Freepik Free License)
 
 Note on Third-Party License Compliance:
 1. A link to THIRD_PARTY_LICENSES.txt is included with the Software's README file to satisfy open-source license and icon attribution requirements.
