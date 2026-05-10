@@ -2,7 +2,7 @@
 
 This file lists the structured and comprehensive security audit elements that **Secuditor Lite** checks on Windows systems, helping identify misconfigurations, vulnerabilities, and potential risks across **endpoint, network, and operational security layers**.
 
-For complete and accurate results, the tool should be run with administrator privileges.
+For complete and accurate results, the tool should be run with **administrator privileges**.
 
 ---
 
