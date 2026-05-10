@@ -71,8 +71,9 @@ For complete and accurate results, the tool should be run with **administrator p
 ### 🌍 Remote Access & Exposure
 - Remote Desktop and Remote Assistance status  
 - PowerShell remoting configuration  
-- RPC and remote service exposure  
-- Telnet, NetBIOS, UPnP, and Bluetooth exposure  
+- RPC and remote service exposure
+- Network COM Services analysis
+- Telnet, NetBIOS, UPnPHost, and Bluetooth exposure  
 - WinRM configuration and risk level  
 - SMB protocol versions (SMBv1 / SMBv2)  
 
