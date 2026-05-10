@@ -48,9 +48,10 @@ This file lists the structured and comprehensive security audit elements that **
 
 ---
 
-### 🛡️ Basic Security Settings
+### 🛡️ Endpoint Security Settings
 - Antivirus / endpoint protection status  
-- Firewall configuration and activity  
+- Firewall configuration and activity
+- Auto Screen Lock configuration 
 - User Account Control (UAC) settings  
 - Core isolation and memory protection
 - Attack Surface Reduction (ASR) rules
