@@ -44,9 +44,9 @@ For complete and accurate results, the tool should be run with **administrator p
 ### 🛰️ Gateway Discovery
 - Gateway vendor identification via MAC OUI lookup  
 - Default gateway MAC and IP address mapping  
-- NAT environment detection and identification of potential VPN/Proxy  
-- Gateway responsiveness testing using ICMP (ping) and HTTP probing  
-- Public IP exposure analysis to determine external-facing network presence  
+- NAT environment and VPN/Proxy detection  
+- Gateway testing using ICMP (ping) and HTTP probing  
+- Public IP identification and geolocation check  
 
 ---
 
