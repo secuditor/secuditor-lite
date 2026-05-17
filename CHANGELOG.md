@@ -5,7 +5,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ## [2.2.1] – 2026-05-17 Latest
 ### Added
-- Improved SSL/TLS Interception module detection logic and output formatting
+- Improved SSL/TLS interception module detection logic and formatting
 - Added digitally signed process validation to the detection engine
 - Added LOLBins (Living Off The Land Binaries) detection intelligence
 
