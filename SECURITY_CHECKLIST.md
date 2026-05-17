@@ -142,10 +142,11 @@ For complete and accurate results, the tool should be run with **administrator p
 ---
 
 ### 🧩 OS Version & Update Status
-- Windows version and build comparison  
-- Activation status  
-- Installed and pending updates  
-- Patch level and update history  
+- Windows version, edition, and build identification
+- Activation status check (genuine vs unlicensed indicators)  
+- Installed updates inventory (cumulative and security updates)  
+- Pending updates detection (Windows Update queue analysis)  
+- Patch level assessment against latest known security baseline  
 
 ---
 
