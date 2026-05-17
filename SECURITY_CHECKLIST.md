@@ -11,8 +11,7 @@ For complete and accurate results, the tool should be run with **administrator p
 - System architecture (x86/x64/ARM) and processor identification  
 - CPU core count, thread count, and current utilization overview  
 - Memory usage analysis (total, used, and available RAM)  
-- Disk structure overview including partitions, file systems, and storage utilization  
-- Basic system performance snapshot (CPU, RAM, and disk load indicators)  
+- Disk structure overview including partitions, and storage utilization  
 
 ---
 
@@ -21,7 +20,6 @@ For complete and accurate results, the tool should be run with **administrator p
 - USB devices enumeration including storage, input, and peripheral devices  
 - Biometric hardware detection (e.g., fingerprint readers, IR cameras)  
 - Network interfaces enumeration including physical and virtual adapters  
-- Identification of inactive or disabled hardware interfaces  
 
 ---
 
