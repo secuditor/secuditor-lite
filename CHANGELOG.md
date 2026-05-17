@@ -3,7 +3,19 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.2.0] – 2026-05-10 Latest
+## [2.2.1] – 2026-05-17 Latest
+### Added
+- Improved SSL/TLS Interception module detection logic and output formatting
+- Added digitally signed process validation to the detection engine
+- Added LOLBins (Living Off The Land Binaries) detection intelligence
+
+### Fixed
+- Resolved duplicate results issue in Suspicious Connections detection module
+- Clipboard events evaluation logic fixed via improved timestamp correlation
+
+---
+
+## [2.2.0] – 2026-05-10
 ### Added
 - Report building window (via Tk) with selectable views
 - Auto Screen Lock check added to Endpoint Security
