@@ -20,7 +20,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 - [sp_endpoint_security.py](sp_endpoint_security.py) – Reviews core Windows endpoint security posture settings
 - [sp_gateway_detection.py](sp_gateway_detection.py) – Detects the local network's default gateway and public IP
 - [sp_hash_checksum.py](sp_hash_checksum.py) – Calculates cryptographic file hashes for integrity verification
-- [sp_https_scanner.py](sp_https_scanner.py) - Mini HTTPS security scanner for basic inspection (port 443 only)
+- [sp_https_scanner.py](sp_https_scanner.py) – Mini HTTPS security scanner for basic inspection (port 443 only)
 - [sp_installed_apps.py](sp_installed_apps.py) – Outputs a list of applications installed on the device
 - [sp_network_settings.py](sp_network_settings.py) – Presents the device's network adapters and configurations
 - [sp_password_policy.py](sp_password_policy.py) – Evaluates local and domain affiliated password policies
