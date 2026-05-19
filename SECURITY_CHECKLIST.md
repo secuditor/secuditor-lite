@@ -9,14 +9,14 @@ For complete and accurate results, the tool should be run with **administrator p
 ### 🖥️ System Overview
 - Hostname and operating system version detection  
 - System architecture (x86/x64/ARM) and processor identification  
-- CPU core count, thread count, and total memory (RAM) capacity
+- CPU core count, thread count, and total memory (RAM) capacity  
 - Disk structure overview including partitions, and storage    
 
 ---
 
 ### 🔌 Hardware Analysis
-- Detection of connected hardware components and device classes  
-- USB devices enumeration including storage, input, and peripheral devices  
+- Detection of connected hardware components and devices  
+- USB devices enumeration including storage, input, and peripheral  
 - Biometric hardware detection (fingerprint readers, IR cameras)  
 - Network interfaces enumeration including physical and virtual adapters  
 
