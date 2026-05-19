@@ -16,8 +16,8 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 
 - [sp_check_network.py](sp_check_network.py) – Checks internet connectivity, ISP, geolocation and VPN status
 - [sp_credential_integrity.py](sp_credential_integrity.py) – Audits Windows credential protection mechanisms
-- [sp_endpoint_security.py](sp_endpoint_security.py) – Reviews core Windows endpoint security posture settings
 - [sp_domain_settings.py](sp_domain_settings.py) – Identifies domain affiliation and discovers related settings
+- [sp_endpoint_security.py](sp_endpoint_security.py) – Reviews core Windows endpoint security posture settings
 - [sp_gateway_detection.py](sp_gateway_detection.py) – Detects the local network's default gateway and public IP
 - [sp_hash_checksum.py](sp_hash_checksum.py) – Calculates cryptographic file hashes for integrity verification
 - [sp_https_scanner.py](sp_https_scanner.py) - Mini HTTPS security scanner for basic inspection (port 443 only)
