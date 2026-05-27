@@ -100,8 +100,8 @@ The tool also detects network elements, runs internet speed tests, and generates
 ## Getting Started
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.2.1.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.2.1/SecuditorLite_2.2.1.zip) (21 MB)
-- **SHA-256:** b305d3d3c4f327e78fa9a4b3dc749458d0e3fc6fbe1815dac3946d4074189cba
+- #### [SecuditorLite_2.2.2.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.2.2/SecuditorLite_2.2.2.zip) (21 MB)
+- **SHA-256:** 
 
 ### 2️⃣ Extract & Run
 - Unzip the file
