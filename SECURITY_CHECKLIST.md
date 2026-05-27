@@ -1,4 +1,4 @@
-# Secuditor Lite 2.2.1 – Security Checks & Diagnostics
+# Secuditor Lite 2.2.2 – Security Checks & Diagnostics
 
 This file lists the structured and comprehensive security audit elements that **Secuditor Lite** checks on Windows systems, helping identify misconfigurations, vulnerabilities, and potential risks across **endpoint, network, and operational security layers**.
 
@@ -70,8 +70,8 @@ For complete and accurate results, the tool should be run with **administrator p
 ### 🌍 Remote Access & Exposure
 - Remote Desktop and Remote Assistance status  
 - PowerShell remoting configuration  
-- RPC Print Spooler and remote service exposure
-- Network COM Services exposure analysis  
+- RPC Print Spooler and remote service exposure  
+- DCOM Service vulnerability analysis  
 - Telnet, Rsync, NetBIOS, UPnPHost, and Bluetooth exposure  
 - WinRM configuration and risk level analysis  
 - SMB protocol versions (SMBv1 / SMBv2)  
