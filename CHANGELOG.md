@@ -3,7 +3,14 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.2.1] – 2026-05-17 Latest
+## [2.2.2] – 2026-05-27 Latest
+### Added
+- Enhanced the WinRM remote access check and output
+- Added DCOM service vulnerability evaluation to summary report
+
+---
+
+## [2.2.1] – 2026-05-17
 ### Added
 - Improved SSL/TLS interception module detection logic and formatting
 - Added digitally signed process validation to the detection engine
