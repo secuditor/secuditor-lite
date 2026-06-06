@@ -8,7 +8,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Data Execution Prevention (DEP) check added to Endpoint Security 
 
 ### Fixed
-- Corrected DCOM output on the summary report view
+- Corrected DCOM status output in the summary report
 
 ---
 
