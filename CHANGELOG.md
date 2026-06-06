@@ -8,7 +8,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Data Execution Prevention (DEP) check added to Endpoint Security 
 
 ### Fixed
-- Corrected DCOM output in the summary report
+- Corrected DCOM output on the summary report view
 
 ---
 
@@ -230,7 +230,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - SNMP server feature check
 - Rsync server feature check
 - Improved the suspicious process detection mechanism
-- Enhanced Sthe summary report view 
+- Enhanced the summary report view
 
 ### Fixed
 - Resolved password expiration output issue
