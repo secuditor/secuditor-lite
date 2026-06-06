@@ -3,7 +3,16 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.2.2] – 2026-05-27 Latest
+## [2.2.3] – 2026-06-06 Latest
+### Added
+- Data Execution Prevention (DEP) check added to Endpoint Security 
+
+### Fixed
+- Corrected DCOM output in the summary report
+
+---
+
+## [2.2.2] – 2026-05-27
 ### Added
 - Enhanced the WinRM remote access check and output
 - Added DCOM service vulnerability evaluation to summary report
