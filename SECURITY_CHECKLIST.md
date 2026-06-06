@@ -57,6 +57,7 @@ For complete and accurate results, the tool should be run with **administrator p
 - Core isolation and memory protection  
 - Attack Surface Reduction (ASR) rules  
 - PowerShell execution policy review  
+- Data Execution Prevention (DEP) status  
 - EFS encryption protocol usage  
 - Disk encryption (BitLocker) status  
 - Office macro security policy review  
