@@ -3,7 +3,14 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.2.3] – 2026-06-06 Latest
+## [2.2.4] – 2026-06-22 Latest
+### Fixed
+- Resolved internal logging timestamp issues
+- IP discovery error in Gateway Discovery module fixed
+
+---
+
+## [2.2.3] – 2026-06-06
 ### Added
 - Data Execution Prevention (DEP) check added to Endpoint Security 
 
