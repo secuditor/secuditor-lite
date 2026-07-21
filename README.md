@@ -85,6 +85,8 @@ The tool also detects network elements, runs internet speed tests, and generates
 - About and contact us
 - Menu
 
+<br>
+
 *Secuditor Lite application demo (version 2.2.1)*
 <p align="center">
   <a>
@@ -125,6 +127,16 @@ The tool also detects network elements, runs internet speed tests, and generates
 <br>
 
 <a name="safety-privacy"></a>
+
+## Lawful Use
+
+This tool is intended solely for lawful and authorized use.
+You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
+The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
+Use responsibly and in compliance with your local governance.
+
+---
+<br>
 
 ## Safety Notice
 
