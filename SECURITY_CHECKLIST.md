@@ -1,4 +1,4 @@
-# Secuditor Lite 2.2.4 – Security Checks & Diagnostics
+# Secuditor Lite 2.2.5 – Security Checks & Diagnostics
 
 This file lists the structured and comprehensive security audit elements that **Secuditor Lite** checks on Windows systems, helping identify misconfigurations, vulnerabilities, and potential risks across **endpoint, network, and operational security layers**.
 
@@ -27,7 +27,7 @@ For complete and accurate results, the tool should be run with **administrator p
 - Subnet mask and network segmentation details  
 - Default gateway identification and overview  
 - DHCP and DNS server detection and analysis  
-- Network interface status (Wi-Fi, Ethernet, virtual adapters)  
+- Network interface status (Wi-Fi, Ethernet, virtual adapters)
 
 ---
 
@@ -45,7 +45,13 @@ For complete and accurate results, the tool should be run with **administrator p
 - Default gateway MAC and IP address mapping  
 - NAT environment and VPN/Proxy detection  
 - Gateway testing using ICMP (ping) and HTTP probing  
-- Public IP identification and geolocation check  
+- Public IP identification and geolocation check
+
+---
+
+### 🔍 LAN Scanning (via toolbar button)
+- Local network device discovery and host enumeration
+- Detection of common open ports and exposed network services
 
 ---
 
@@ -137,7 +143,7 @@ For complete and accurate results, the tool should be run with **administrator p
 - Digitally signed process validation to none system processes
 - Analysis of active network connections (local and external endpoints)  
 - Correlation between processes and network activity to detect suspicious communication  
-- Detection of abnormal port usage, including high-numbered or commonly abused ports  
+- Detection of abnormal external connections usage, including commonly abused ports  
 
 ---
 
