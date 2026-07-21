@@ -5,7 +5,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ## [2.2.5] – 2026-07-21 Latest
 ### Added
-- New LAN Scanner module with toolbar button integration
+- Added a new LAN Scanner module with toolbar button integration
 - Quick navigation link from the summary report to Gateway Discovery node
 
 ### Changed
