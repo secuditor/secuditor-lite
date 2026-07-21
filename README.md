@@ -85,10 +85,19 @@ The tool also detects network elements, runs internet speed tests, and generates
 - About and contact us
 - Menu
 
-*The animation below shows Secuditor Lite application in action*
+*Secuditor Lite application demo (version 2.2.1)*
 <p align="center">
   <a>
-    <img src="media/animated-gif-secuditor-fast.gif" alt="Demo" />
+    <img src="media/animated-gif-secuditor-fast.gif" alt="Secuditor Lite demo" />
+  </a>
+</p>
+
+<br>
+
+*Secuditor LAN Scanner Module with Toolbar Integration (version 2.2.5)*
+<p align="center">
+  <a>
+    <img src="media/secuditor-lan-scanner-prod.png" alt="Secuditor LAN Scanner Module" />
   </a>
 </p>
 
