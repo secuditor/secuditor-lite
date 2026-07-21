@@ -22,6 +22,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 - [sp_hash_checksum.py](sp_hash_checksum.py) – Calculates cryptographic file hashes for integrity verification
 - [sp_https_scanner.py](sp_https_scanner.py) – Mini HTTPS security scanner for basic inspection (port 443 only)
 - [sp_installed_apps.py](sp_installed_apps.py) – Outputs a list of applications installed on the device
+- [sp_lan_scanner.py](sp_lan_scanner.py) – Local network device discovery and common open port detection
 - [sp_network_settings.py](sp_network_settings.py) – Presents the device's network adapters and configurations
 - [sp_password_policy.py](sp_password_policy.py) – Evaluates local and domain affiliated password policies
 - [sp_remote_access.py](sp_remote_access.py) – Detects remote access capabilities and services exposure

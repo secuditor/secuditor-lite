@@ -130,7 +130,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 ## Lawful Use
 
-This tool is intended solely for lawful and authorized use.
+**Secuditor Lite** is intended solely for lawful and authorized use.
 You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
 The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
 Use responsibly and in compliance with your local governance.
