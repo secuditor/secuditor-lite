@@ -6,7 +6,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ## [2.2.5] – 2026-07-21 Latest
 ### Added
 - Added a new LAN Scanner module with toolbar button integration
-- Enhanced local network host and port scanning capabilities
+- Enhanced local network device detection and port auditing capabilities
 
 ### Changed
 - UI text and terminology improvements
