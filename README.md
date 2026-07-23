@@ -48,7 +48,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 **Secuditor Lite** analyzes Windows systems across:
 
 - System overview & hardware analysis
-- Network configuration & gateway discovery
+- Network configuration & LAN discovery
 - Shared folders & permissions mapping
 - Security controls (AV, EDR, Firewall, UAC, and more)
 - Remote access & server roles analysis
