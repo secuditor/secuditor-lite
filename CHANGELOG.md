@@ -8,8 +8,8 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Added a Windows Events node to the Events category
 - Major improvements to the Suspicious Processes detection engine
 
-### Changed
-- UI text and terminology improvements
+### Fixed
+- Resolved minor bugs and errors
 
 ---
 
