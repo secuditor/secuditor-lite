@@ -1,4 +1,4 @@
-# Secuditor Lite 2.2.5 – Security Checks & Diagnostics
+# Secuditor Lite 2.2.6 – Security Checks & Diagnostics
 
 This file lists the structured and comprehensive security audit elements that **Secuditor Lite** checks on Windows systems, helping identify misconfigurations, vulnerabilities, and potential risks across **endpoint, network, and operational security layers**.
 
@@ -122,6 +122,15 @@ For complete and accurate results, the tool should be run with **administrator p
 
 ---
 
+### 🧩 OS Version & Update Status
+- Windows version, edition, and build identification
+- Activation status check (genuine vs unlicensed indicators)  
+- Installed updates inventory (cumulative and security updates)  
+- Pending updates detection (Windows Update queue analysis)  
+- Patch level assessment against latest known security baseline
+
+---
+
 ### 🔐 SSL/TLS Inspection
 - Certificate validation and issuer analysis  
 - Detection of SSL/TLS interception and potential man-in-the-middle  
@@ -144,15 +153,6 @@ For complete and accurate results, the tool should be run with **administrator p
 - Analysis of active network connections (local and external endpoints)  
 - Correlation between processes and network activity to detect suspicious communication  
 - Detection of abnormal external connections usage, including commonly abused ports  
-
----
-
-### 🧩 OS Version & Update Status
-- Windows version, edition, and build identification
-- Activation status check (genuine vs unlicensed indicators)  
-- Installed updates inventory (cumulative and security updates)  
-- Pending updates detection (Windows Update queue analysis)  
-- Patch level assessment against latest known security baseline  
 
 ---
 
