@@ -64,7 +64,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Auto Screen Lock check added to Endpoint Security
 
 ### Changed
-- UI and terminology improvements and corrections
+- UI text and terminology improvements
 - Renamed "Basic Security" node to "Endpoint Security"
 - Removed Pillow dependency, reducing executable size from 28 MB to 21 MB
 
