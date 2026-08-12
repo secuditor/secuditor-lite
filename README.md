@@ -141,7 +141,7 @@ Use responsibly and in compliance with your local governance.
 ## Safety Notice
 
 **Secuditor Lite** is digitally signed and safe for use.
-Please ensure that you download the software from the official source.
+Please download the software only from the official distribution channels. If downloading from a third-party source, please verify the digital signature before use.
 
 Since it is based on Python code, some antivirus programs may incorrectly flag or block its operation.
 If you trust this application, you may need to create an **exception**, add it to a **whitelist** or **restore** the file from your antivirus software’s quarantine area.
