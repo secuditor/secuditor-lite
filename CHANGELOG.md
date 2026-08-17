@@ -3,7 +3,14 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.2.6] – 2026-08-05 Latest
+## [2.2.7] – 2026-08-17 Latest
+### Added
+- Suspicious activity scanning capabilities integrated into the detection engine
+- UI improvements and terminology updates
+
+---
+
+## [2.2.6] – 2026-08-05
 ### Added
 - Added a Windows Events node to the Events category
 - Major improvements to the Suspicious Processes detection engine
