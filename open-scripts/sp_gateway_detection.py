@@ -99,7 +99,7 @@ def get_mac_from_arp(ip):
 def lookup_vendor(mac, device_ip=None):
     """
     Lookup vendor from MAC address.
-    1. Try macvendors.com API.
+    1. Try macvendors.com API using the OUI only.
     2. Identify virtual / locally administered MACs.
     3. Optional: use ping_device for TTL/response heuristics if IP is provided.
     """
@@ -112,7 +112,7 @@ def lookup_vendor(mac, device_ip=None):
 
     # --- First: try online API ---
     try:
-        response = requests.get(f"https://api.macvendors.com/{mac}", timeout=3)
+        response = requests.get(f"https://api.macvendors.com/{oui}", timeout=3)
         if response.status_code == 200:
             api_vendor = response.text.strip()
             if api_vendor and "unknown" not in api_vendor.lower():
