@@ -16,7 +16,7 @@ User may not:
 - Use the Software for any unlawful, unethical, or unauthorized purpose.
 
 3. Ownership
-- The Software is licensed, not sold. All rights, title, and interest in and to the Software remain with the Licensor. This includes all code written by the Licensor, including portions created or assisted using AI tools under the direction of the Licensor.
+- The Software is licensed, not sold. All rights, title, and interest in and to the Software remain with the Licensor. This includes all code and other materials created by the Licensor.
 - The Secuditor name, logo, and icon are the exclusive property of the Licensor and are protected by applicable copyright and trademark laws, whether or not formally registered.
 - This Agreement does not grant the User any rights to the source code, which constitutes confidential and proprietary information protected by applicable intellectual property laws.
 
