@@ -66,9 +66,8 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.1.9] – 2026-05-05
-- Added detection for Azure AD / Hybrid domain environments (Domain Settings)
+- Added detection for Azure AD / Hybrid domain environments
 - Improved Server Features scanning with multi-service evaluation per feature
-- Updated terminology: Local Firewall → Host-based Firewall
 - General UI and output text refinements
 
 ---
