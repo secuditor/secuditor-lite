@@ -85,7 +85,6 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ## [2.1.7] – 2026-04-20
 - Added local credential hive access check (Credential Integrity)
 - Added Microsoft Defender Attack Surface Reduction (ASR) rules check
-- Renamed "Persistence" category to "Detection"
 - Removed Remote Assistance from summary
 - Removed unused dependency: dns.resolver
 - Removed unused import: packaging.version
@@ -96,10 +95,10 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Minor textual updates and UI tweaks 
 - Enhanced security layer for the speed test feature 
 - Enhanced the system process scanning module with behavior-based detection 
-- Incoming and outgoing traffic detection per-process (Suspicious Connections) 
-- Multi-port activity detection per-process (Suspicious Connections) 
-- Command shell activity detection (potential reverse shell indicators) 
-- High-entropy binary indicators (packed or obfuscated executables) 
+- Added incoming and outgoing traffic detection per-process (Suspicious Connections) 
+- Added multi-port activity detection per-process (Suspicious Connections) 
+- Added command shell activity detection (potential reverse shell indicators) 
+- Added high-entropy binary indicators (packed or obfuscated executables) 
 
 ---
 
