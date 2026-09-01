@@ -103,10 +103,10 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.1.5] – 2026-03-14
-- IAS (Internet Authentication Service) server check
-- RRAS (Routing and Remote Access Service) server check
-- VMMS virtualization service detection (Hyper-V / VMware / VirtualBox)
-- UPnP remote access check
+- Added IAS (Internet Authentication Service) server check
+- Added RRAS (Routing and Remote Access Service) server check
+- Added VMMS virtualization service detection (Hyper-V / VMware / VirtualBox)
+- Added UPnP remote access check
 - Resolved caching issue affecting certain system checks
 
 ---
@@ -114,7 +114,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ## [2.1.4] – 2026-03-07
 - Right-click "Run Check" option to execute single security checks
 - Controlled timestamps for console messages and exported logs
-- Resolved Network Gateway detection issues on IPv6 networks
+- Resolved network gateway detection issues on IPv6 networks
 - Resolved MAC/Vendor lookup attempting to run on IPv6 gateways
 
 ---
@@ -222,7 +222,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [1.9.9] – 2025-11-21
-- Network Gateway report issue resolved
+- Network gateway report issue resolved
 - SSL/TLS interception bug fixed
 - Secure Boot module now runs without requiring administrative privileges
 
@@ -230,7 +230,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ## [1.9.8] – 2025-11-12
 - Added descriptive text for toolbar buttons
-- Resolved Windows Core Isolation check issue
+- Resolved Windows core isolation check issue
 
 ---
 
