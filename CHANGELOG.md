@@ -58,11 +58,10 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.2.0] – 2026-05-10
-- Report building window (via Tk) with selectable views
+- Added a report building window (via Tk) with selectable views
 - Auto Screen Lock check added to Endpoint Security
 - UI text and terminology improvements
-- Renamed "Basic Security" node to "Endpoint Security"
-- Removed Pillow dependency, reducing executable size from 28 MB to 21 MB
+- Removed pillow dependency, reducing executable size from 28 MB to 21 MB
 
 ---
 
