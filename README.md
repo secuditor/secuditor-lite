@@ -96,7 +96,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 <br>
 
-*Secuditor LAN Scanner Module with Toolbar Integration (version 2.2.7)*
+*Secuditor LAN Scanner Module with Toolbar Integration (version 2.2.8)*
 <p align="center">
   <a>
     <img src="media/secuditor-lan-scanner-prod.png" alt="Secuditor LAN Scanner Module" />
