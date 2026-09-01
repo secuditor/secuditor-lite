@@ -180,7 +180,6 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Added WINS server feature check
 - Added MSMQ server feature check
 - Password policy history check enhanced
-- Replaced toolbar icon with a new design
 - Updated main window features description
 
 ---
@@ -200,7 +199,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.0.2] – 2025-12-20
-- Redesigned main screen visuals
+- Redesigned the UI main screen visuals
 - Optimized threat intelligence processing
 - Event logs display issue resolved
 
@@ -210,7 +209,6 @@ All notable changes to **Secuditor Lite** are documented in this file.
 - Added SNMP server feature check
 - Added Rsync server feature check
 - Improved the suspicious process detection mechanism
-- Enhanced the summary report view
 - Resolved password expiration output issue
 
 ---
