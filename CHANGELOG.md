@@ -74,11 +74,10 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.1.8] – 2026-04-30
-- Added removable storage & USB Autorun checks (Basic Security) 
-- Added Office macro policy system-based check (Basic Security)
+- Added removable storage & USB Autorun checks
+- Added Office macro policy system-based check
 - Enhanced sensitive path scanning with support for additional data types
 - Fixed issue where sensitive path scanning caused unexpected window jumps
-- Corrected Server Features output to accurately display "Not Installed"
 
 ---
 
