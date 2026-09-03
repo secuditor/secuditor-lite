@@ -50,8 +50,9 @@ For complete and accurate results, the tool should be run with **administrator p
 ---
 
 ### 🔍 LAN Scanning (via toolbar button)
-- Local network device discovery and host enumeration
-- Detection of common open ports and exposed network services
+- IPv4-based local network device discovery  
+- Vendor identification via MAC address OUI  
+- Detection of common open ports and exposed network services  
 
 ---
 
