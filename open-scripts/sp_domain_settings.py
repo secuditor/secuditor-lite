@@ -44,18 +44,68 @@ class Spinner:
 
 # --- Domain/workgroup info ---
 def _check_laps():
-    """Check if LAPS is installed and enabled."""
+    """Check legacy Microsoft LAPS and built-in Windows LAPS."""
     try:
-        key_path = r"SOFTWARE\Policies\Microsoft Services\AdmPwd"
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-            installed = True
-            try:
-                enabled, _ = winreg.QueryValueEx(key, "AdmPwdEnabled")
-                enabled = bool(enabled)
-            except FileNotFoundError:
-                enabled = False
-            return installed, enabled
-    except FileNotFoundError:
+        # --- Legacy Microsoft LAPS ---
+        legacy_key = r"SOFTWARE\Policies\Microsoft Services\AdmPwd"
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                legacy_key
+            ) as key:
+
+                try:
+                    enabled, _ = winreg.QueryValueEx(
+                        key,
+                        "AdmPwdEnabled"
+                    )
+
+                    if bool(enabled):
+                        return True, True
+
+                except FileNotFoundError:
+                    pass
+
+                return True, False
+
+        except FileNotFoundError:
+            pass
+
+        # --- Built-in Windows LAPS ---
+        windows_laps_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\Config"
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                windows_laps_key
+            ) as key:
+
+                # BackupDirectory:
+                # 0 = Disabled
+                # 1 = Azure AD
+                # 2 = Active Directory
+                try:
+                    backup_directory, _ = winreg.QueryValueEx(
+                        key,
+                        "BackupDirectory"
+                    )
+
+                    if backup_directory in (1, 2):
+                        return True, True
+
+                except FileNotFoundError:
+                    pass
+
+                return True, False
+
+        except FileNotFoundError:
+            pass
+
+        # Neither legacy nor Windows LAPS detected
+        return False, False
+
+    except Exception:
         return False, False
 
 def get_domain_settings():
@@ -78,6 +128,7 @@ def get_domain_settings():
         "Hostname": socket.gethostname(),
         "Current User": getpass.getuser(),
         "Domain Role": None,
+        "NTP": None,
         "NTLM Policy": None,
         "Privileged Users": [],
         "Regular Users": []
@@ -101,33 +152,70 @@ def get_domain_settings():
             data["Type"] = "Azure AD"
         elif domain_joined:
             data["Type"] = "Domain"
+            
     except Exception:
         pass
 
     # --- Domain / Workgroup detection ---
     try:
-        output = subprocess.check_output(
-            "wmic computersystem get domain",
-            shell=True,
-            text=True
+        import ctypes
+        from ctypes import wintypes
+
+        NetGetJoinInformation = ctypes.windll.netapi32.NetGetJoinInformation
+        NetGetJoinInformation.argtypes = [
+            wintypes.LPCWSTR,
+            ctypes.POINTER(wintypes.LPWSTR),
+            ctypes.POINTER(ctypes.c_int)
+        ]
+        NetGetJoinInformation.restype = wintypes.DWORD
+
+        NetApiBufferFree = ctypes.windll.netapi32.NetApiBufferFree
+        NetApiBufferFree.argtypes = [ctypes.c_void_p]
+        NetApiBufferFree.restype = wintypes.DWORD
+
+        # NETSETUP_JOIN_STATUS
+        NETSETUP_JOIN_STATUS = {
+            0: "Unknown",
+            1: "Unjoined",
+            2: "Workgroup",
+            3: "Domain"
+        }
+
+        computer_name = socket.gethostname()
+
+        name_buffer = wintypes.LPWSTR()
+        join_status = ctypes.c_int()
+
+        result = NetGetJoinInformation(
+            computer_name,
+            ctypes.byref(name_buffer),
+            ctypes.byref(join_status)
         )
 
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if len(lines) > 1:
-            domain_name = lines[1]
-            computer_name = data["Hostname"]
+        if result == 0:  # NERR_Success
+            join_type = NETSETUP_JOIN_STATUS.get(
+                join_status.value,
+                "Unknown"
+            )
 
-            # DO NOT override Azure AD / Hybrid detection
-            if data["Type"] in ["Azure AD", "Hybrid Azure AD"]:
-                pass
-
-            elif domain_name.upper() == "WORKGROUP":
-                data["Type"] = "Workgroup"
-                data["Name"] = domain_name
-
-            elif domain_name.upper() != computer_name.upper():
+            if join_type == "Domain":
                 data["Type"] = "Domain"
-                data["Name"] = domain_name
+                data["Name"] = name_buffer.value
+
+            elif join_type == "Workgroup":
+                data["Type"] = "Workgroup"
+                data["Name"] = name_buffer.value
+
+            elif join_type == "Unjoined":
+                data["Type"] = "Local"
+                data["Name"] = None
+
+            else:
+                data["Type"] = "Local"
+                data["Name"] = None
+
+            if name_buffer:
+                NetApiBufferFree(name_buffer)
 
     except Exception:
         pass
@@ -142,15 +230,25 @@ def get_domain_settings():
             4: "Backup Domain Controller",
             5: "Primary Domain Controller"
         }
+
         role = subprocess.check_output(
-            'powershell -Command "(Get-WmiObject Win32_ComputerSystem).DomainRole"',
-            shell=True, text=True
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-CimInstance Win32_ComputerSystem).DomainRole"
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL
         ).strip()
-        try:
-            role_int = int(role)
-            data["Domain Role"] = role_map.get(role_int, f"Unknown ({role})")
-        except:
-            data["Domain Role"] = f"Unknown ({role})"
+
+        role_int = int(role)
+        data["Domain Role"] = role_map.get(
+            role_int,
+            f"Unknown ({role_int})"
+        )
+
     except Exception:
         data["Domain Role"] = "Unknown"
 
