@@ -12,6 +12,13 @@ import subprocess
 import winreg
 import hashlib
 import psutil
+import ctypes
+
+_CREATE_NO_WINDOW = 0x08000000
+
+_STARTUPINFO = subprocess.STARTUPINFO()
+_STARTUPINFO.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+_STARTUPINFO.wShowWindow = subprocess.SW_HIDE
 
 # --- Hide ps blue screens ---
 def run_hidden_command(cmd_list):
@@ -82,6 +89,33 @@ def check_hive_access():
             results.append(f"{path}\n    Unknown")
 
     return "\n  ".join(results)
+
+# --- Windows Credential Manager ---
+def check_credential_manager():
+    """
+    Check whether Windows Credential Manager contains stored credentials.
+    Does not access or expose credential contents.
+    """
+    try:
+        output = run_hidden_command([
+            "cmdkey",
+            "/list"
+        ])
+
+        if not output:
+            return "No stored credentials detected"
+
+        # cmdkey normally reports stored credentials using
+        # entries such as "Target:".
+        credential_count = output.count("Target:")
+
+        if credential_count > 0:
+            return f"{credential_count} stored credentials detected"
+
+        return "No stored credentials detected"
+
+    except Exception:
+        return "Unknown"
 
 # --- Credential Guard ---
 def check_credential_guard():
@@ -206,6 +240,7 @@ def run_credential_integrity_checks():
     lsass_details = check_lsass_integrity()
     lsass_protection_status = check_lsass_protection()
     lsass_signature_status = check_lsass_signature()
+    credential_manager_status = check_credential_manager()
 
     report = [""]
 
@@ -232,10 +267,16 @@ def run_credential_integrity_checks():
     # LSASS Signature
     report.append("LSASS Signature:")
     report.append(f"  {lsass_signature_status}")
+    report.append("–" * 40)
 
     # SAM Hive
     report.append("SAM Hive:")
     report.append(f"  {check_hive_access_status}")
+    report.append("–" * 40)
+
+    # Credential Manager
+    report.append("Windows Credential Manager:")
+    report.append(f"  {credential_manager_status}")
 
     return "\n".join(report)
 
