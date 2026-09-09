@@ -132,12 +132,12 @@ For complete and accurate results, the tool should be run with **administrator p
 
 ---
 
-### 🔐 SSL/TLS Inspection
-- Certificate validation and issuer analysis  
-- Detection of SSL/TLS interception and potential man-in-the-middle  
+### 🔐 SSL/TLS Security Modules
+- Certificate validation (hostname, self-signed, expiration) and issuer analysis
 - Verification of certificate chains and fingerprints  
-- Identification of potential man-in-the-middle activity  
 - Key type and strength (RSA/ECDSA) evaluated against minimum security thresholds  
+- Detection of SSL/TLS interception and potential man-in-the-middle  
+- Supported TLS version detection, including deprecated Ciphers
 
 ---
 
