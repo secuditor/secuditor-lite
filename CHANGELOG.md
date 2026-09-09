@@ -3,6 +3,14 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
+## [2.2.9] – 2026-09-10 Latest
+- Added the TLS Security module as a new toolbar button
+- Added Credential Manager store count to the Credential Integrity node
+- Improved the Suspicious Activity scanner with new DLL/Module anomaly detection capability
+- UI improvements, bug fixes, and terminology updates
+
+---
+
 ## [2.2.8] – 2026-09-01 Latest
 - Added a vendor lookup feature to the LAN Scanner module
 - Improved Windows 11 version and build detection
