@@ -11,7 +11,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.2.7] – 2026-08-17
-- Suspicious activity scanning capabilities integrated into the detection engine
+- Suspicious Activity scanning capabilities integrated into the detection engine
 - UI improvements and terminology updates
 
 ---
@@ -24,7 +24,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.2.5] – 2026-07-21 
-- Added a new LAN scanner module with toolbar button integration
+- Added a new LAN Scanner module with toolbar button integration
 - Enhanced local network device detection and port auditing capabilities
 - UI text and terminology improvements
 
@@ -32,7 +32,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ## [2.2.4] – 2026-06-22
 - Resolved internal logging timestamp issues
-- IP discovery error in the gateway discovery module fixed
+- IP discovery error in the Gateway Discovery module fixed
 
 ---
 
@@ -49,7 +49,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 ---
 
 ## [2.2.1] – 2026-05-17
-- Improved SSL/TLS interception module detection logic and formatting
+- Improved SSL/TLS Interception module detection logic and formatting
 - Added digitally signed process validation to the detection engine
 - Added LOLBins (Living Off The Land Binaries) detection intelligence
 - Resolved duplicate results issue in Suspicious Connections detection module
