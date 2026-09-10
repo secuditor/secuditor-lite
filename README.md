@@ -98,17 +98,17 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 <br>
 
-*Secuditor LAN Discovery Module*
+*Secuditor LAN Discovery module*
 <p align="center">
   <a>
-    <img src="media/secuditor-lan-discovery-prod.png" alt="Secuditor LAN Discovery Module" />
+    <img src="media/secuditor-lan-discovery-prod.png" alt="Secuditor LAN Discovery module" />
   </a>
 </p>
 
-*Secuditor TLS Security Module*
+*Secuditor TLS Security module*
 <p align="center">
   <a>
-    <img src="media/secuditor-tls-security-prod.png" alt="Secuditor TLS Security Module" />
+    <img src="media/secuditor-tls-security-prod.png" alt="Secuditor TLS Security module" />
   </a>
 </p>
 
