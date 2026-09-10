@@ -79,15 +79,17 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 ### Toolbar buttons (right to left):
 - Internet download speed measurement
-- Network public IP and geolocation detection
-- Export extended security audit report
+- NAT public IP and geolocation detection
+- TLS security module
+- LAN Discovery module
 - Start security audit
+- Export summary report
 - About and contact us
 - Menu
 
 <br>
 
-*Secuditor Lite application demo (version 2.2.1)*
+*Secuditor Lite application demo*
 <p align="center">
   <a>
     <img src="media/animated-gif-secuditor-fast.gif" alt="Secuditor Lite demo" />
@@ -96,7 +98,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 <br>
 
-*Secuditor LAN Scanner Module with Toolbar Integration (version 2.2.8)*
+*Secuditor LAN Scanner Module with Toolbar Integration*
 <p align="center">
   <a>
     <img src="media/secuditor-lan-scanner-prod.png" alt="Secuditor LAN Scanner Module" />
