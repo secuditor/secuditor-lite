@@ -80,8 +80,8 @@ The tool also detects network elements, runs internet speed tests, and generates
 ### Toolbar buttons (right to left):
 - Internet download speed measurement
 - NAT public IP and geolocation detection
-- TLS security module
 - LAN Discovery module
+- TLS security module
 - Start security audit
 - Export summary report
 - About and contact us
