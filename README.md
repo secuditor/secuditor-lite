@@ -84,7 +84,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 - TLS Security module
 - Security Audit
 - Export summary report
-- About and contact us
+- Info and contact us
 - Menu
 
 <br>
