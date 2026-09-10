@@ -98,7 +98,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 <br>
 
-*Secuditor LAN Scanner Module*
+*Secuditor LAN Discovery Module*
 <p align="center">
   <a>
     <img src="media/secuditor-lan-discovery-prod.png" alt="Secuditor LAN Discovery Module" />
