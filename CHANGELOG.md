@@ -11,7 +11,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.2.8] – 2026-09-01 Latest
+## [2.2.8] – 2026-09-01
 - Added a vendor lookup feature to the LAN Scanner module
 - Improved Windows 11 version and build detection
 - Fixed Windows 11 compatibility issues and related bugs
