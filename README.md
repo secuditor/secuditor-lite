@@ -81,8 +81,8 @@ The tool also detects network elements, runs internet speed tests, and generates
 - Internet download speed measurement
 - NAT public IP and geolocation detection
 - LAN Discovery module
-- TLS security module
-- Start security audit
+- TLS Security module
+- Security Audit
 - Export summary report
 - About and contact us
 - Menu
