@@ -1,77 +1,108 @@
 # MIT License – Copyright (c) 2025 Menahem Levinski
 
 """
-Outputs recent Windows security event log entries (requires admin permissions).
+Outputs recent Windows system event log entries.
 """
 
 import os
 import subprocess
 
-# --- Check the latest 24 hours Windows Security events ---
-def get_security_events(report_widget=None):
+# --- Check the latest 24 hours Windows system events ---
+def get_system_events(report_widget=None):
     """
-    Return security events in a dictionary compatible with the GUI.
+    Return system events in a dictionary compatible with the GUI.
     Prints live output to report_widget if provided.
     """
     result = {"Last 24 Hours": []}
 
-    suspicious_events = {
-    # --- Logon/Logoff ---
-    4624: "Successful logon",
-    4625: "Failed logon",
-    4634: "Logoff",
-    4647: "User initiated logoff",
-    4648: "Logon with explicit credentials",
-    4672: "Special privileges assigned to new logon",
+    system_events = {
+    # --- System Startup / Shutdown ---
+    12: "Operating system started",
+    13: "Operating system shutdown",
+    6005: "Event Log service started",
+    6006: "Event Log service stopped",
+    6008: "Unexpected shutdown",
 
-    # --- Account Management ---
-    4720: "New user account created",
-    4722: "User account enabled",
-    4725: "User account disabled",
-    4726: "User account deleted",
-    4738: "User account changed",
-    4740: "User account locked out",
+    # --- Driver / Service Issues ---
+    7000: "Service failed to start",
+    7001: "Dependent service failed",
+    7009: "Service start timeout",
+    7011: "Service timeout",
+    7022: "Service hung during startup",
+    7023: "Service terminated with error",
+    7024: "Service terminated (application error)",
+    7026: "Boot/system driver failed",
+    7031: "Service terminated unexpectedly",
+    7034: "Service unexpectedly terminated",
+    7036: "Service state changed",
 
-    # --- Group Membership Changes ---
-    4727: "Security-enabled global group created",
-    4728: "User added to global group",
-    4729: "User removed from global group",
-    4730: "Global group deleted",
-    4731: "Security-enabled local group created",
-    4732: "User added to local group",
-    4733: "User removed from local group",
-    4734: "Local group deleted",
-    4756: "Universal group created",
-    4757: "User added to universal group",
-    4758: "User removed from universal group",
-    4759: "Universal group deleted",
+    # --- System Stability ---
+    41: "Kernel-Power unexpected restart",
+    55: "File system corruption detected",
+    98: "Volume mount issue",
+    1001: "BugCheck (Blue Screen)",
+    1014: "DNS name resolution failure",
 
-    # --- Policy & Privilege Changes ---
-    4670: "Permissions on an object changed",
-    4719: "System audit policy changed",
-    4739: "Domain policy changed",
-    4782: "Password hash accessed",
+    # --- Hardware / Disk ---
+    7: "Disk bad block detected",
+    11: "Disk controller error",
+    15: "Disk not ready",
+    51: "Disk paging error",
+    129: "Storage reset",
+    153: "Disk retry operation",
 
-    # --- Service & Scheduled Task Events ---
-    4697: "Service installed",
-    4698: "Scheduled task created",
-    4699: "Scheduled task deleted",
-    4700: "Scheduled task enabled",
-    4701: "Scheduled task disabled",
+    # --- Power & Sleep ---
+    1: "System resumed from sleep",
+    42: "System entering sleep",
 
-    # --- Audit & Log Tampering ---
-    1102: "Security log cleared",
-    4614: "Security log retention settings changed",
-    4713: "Kerberos policy changed",
+    # --- Time Service ---
+    35: "Time service synchronization failed",
+    36: "Time service synchronized",
+    37: "Time provider error",
+
+    # --- Network ---
+    4201: "Network adapter connected",
+    4202: "Network adapter disconnected",
+
+    # --- User Profile / Registry ---
+    1500: "User profile cannot be loaded",
+    1501: "User profile restored from backup",
+    1508: "Registry file could not be loaded",
+    1511: "Temporary user profile loaded",
+
+    # --- NTFS / File System ---
+    50: "Delayed write failed",
+    57: "File system data corruption detected",
+
+    # --- Storage / Disk ---
+    140: "Disk configuration changed",
+    157: "Disk has been removed unexpectedly",
+    161: "Dump file creation failed",
+
+    # --- Boot / Startup ---
+    18: "System boot performance issue",
+    27: "Boot device initialization problem",
+
+    # --- Driver Framework ---
+    20001: "Driver Framework initialization failed",
+    20003: "Device driver failure",
+
+    # --- Windows Update ---
+    19: "Windows Update installation successful",
+    20: "Windows Update installation failed",
+    21: "Windows Update restart required",
+
+    # --- Resource Exhaustion ---
+    2004: "Resource exhaustion detected (low memory)",
     }
 
     try:
-        for event_id, desc in suspicious_events.items():
+        for event_id, desc in system_events.items():
             cmd = (
-                f'wevtutil qe Security '
+                f'wevtutil qe System '
                 f'"/q:*[System[(EventID={event_id}) and '
                 f'TimeCreated[timediff(@SystemTime) <= 86400000]]]" '
-                f'/f:text /c:100'
+                f'/f:text'
             )
             try:
                 output = subprocess.check_output(cmd, shell=True, text=True).strip()
@@ -97,7 +128,7 @@ def get_security_events(report_widget=None):
                         report_widget.config(state="disabled")
 
             except subprocess.CalledProcessError:
-                # Cannot read Security log → no admin
+                # Cannot read System log → no admin
                 result["Last 24 Hours"] = "Access denied"
                 if report_widget:
                     report_widget.config(state="normal")
@@ -122,11 +153,11 @@ def get_security_events(report_widget=None):
             report_widget.see("end")
             report_widget.config(state="disabled")
 
-    return format_security_events(result)
+    return format_system_events(result)
 
-def format_security_events(data):
+def format_system_events(data):
     """
-    Formats the security events dictionary into a clean, readable string
+    Formats the system events dictionary into a clean, readable string
     with separators.
     """
     lines = [""]
@@ -155,9 +186,9 @@ def format_security_events(data):
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Security Events Report")
-    print("–" * len("Security Events Report"))
-    print(get_security_events())
+    print("Windows Events Report")
+    print("–" * len("System Events Report"))
+    print(get_system_events())
     print("")
 
     os.system("pause")
