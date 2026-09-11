@@ -1,7 +1,7 @@
 # MIT License – Copyright (c) 2025 Menahem Levinski
 
 """
-HTTPS security scanner (port 443 only).
+HTTPS security scanner.
 
 Checks:
 - Reachability
