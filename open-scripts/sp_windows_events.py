@@ -187,7 +187,7 @@ def format_system_events(data):
 # --- Output ---
 if __name__ == "__main__":
     print("Windows Events Report")
-    print("–" * len("System Events Report"))
+    print("–" * len("Windows Events Report"))
     print(get_system_events())
     print("")
 
