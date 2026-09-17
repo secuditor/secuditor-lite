@@ -238,6 +238,6 @@ secuditor-lite/                   # Main project folder
 ---
 <br>
 <p align="center">
-© 2025-2026 Menahem Levinski. All rights reserved.
+© 2026 Menahem Levinski. All rights reserved.
 <a href="#top">🔝</a>
 </p>
