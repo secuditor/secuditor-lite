@@ -137,16 +137,6 @@ The tool also detects network elements, runs internet speed tests, and generates
 
 <a name="safety-privacy"></a>
 
-## Lawful Use
-
-**Secuditor Lite** is intended solely for lawful and authorized use.
-You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
-The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
-Use responsibly and in compliance with your local governance.
-
----
-<br>
-
 ## Safety Notice
 
 **Secuditor Lite** is digitally signed and safe for use.
@@ -195,6 +185,16 @@ A collection of standalone Python modules developed as part of the **Secuditor p
 <br>
 
 The tool **Secuditor Lite** is distributed in its complete form as a closed source freeware to ensure secure design and code integrity which require a controlled and confidential development environment.
+
+---
+<br>
+
+## Lawful Use
+
+**Secuditor Lite** is intended solely for lawful and authorized use.
+You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
+The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
+Use responsibly and in compliance with your local governance.
 
 ---
 <br>
