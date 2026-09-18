@@ -12,7 +12,7 @@
 <a href="#introduction"><b>Introduction</b></a> &nbsp; ✦ &nbsp;
 <a href="#presentation"><b>Presentation</b></a> &nbsp; ✦ &nbsp;
 <a href="#getting-started"><b>Download</b></a> &nbsp; ✦ &nbsp;
-<a href="#safety-privacy"><b>Safety & Privacy</b></a> &nbsp; ✦ &nbsp;
+<a href="#privacy-safety"><b>Privacy & Safety</b></a> &nbsp; ✦ &nbsp;
 <a href="#open-scripts"><b>Open Scripts</b></a> &nbsp; ✦ &nbsp;
 <a href="#more-info"><b>More Info</b></a>
 </div>
@@ -135,24 +135,7 @@ The tool also detects network elements, runs internet speed tests, and generates
 ---
 <br>
 
-<a name="safety-privacy"></a>
-
-## Safety Notice
-
-**Secuditor Lite** is digitally signed and safe for use.
-Please download the software only from the official distribution channels.
-
-Since it is based on Python code, some antivirus programs may incorrectly flag or block its operation.
-If you trust this application, you may need to create an **exception**, add it to a **whitelist** or **restore** the file from your antivirus software’s quarantine area.
-
-Microsoft Defender SmartScreen may also display a warning because **Secuditor Lite** is a new application.
-When the SmartScreen warning appears:
-1. Click **“More info”**  
-2. Verify that the **Publisher** is `Menahem Levinski`  
-3. Click **“Run anyway”**
-
----
-<br>
+<a name="privacy-safety"></a>
 
 ## Privacy Policy
 
@@ -172,6 +155,23 @@ When Secuditor Lite communicates with our servers, our systems may temporarily l
 
 Optional third-party online checks (such as public IP lookups, NAT checks, TLS/SSL security checks, or external connection analysis) are performed only when initiated by you.
 These online checks may involve connecting to third-party servers, which may receive your public IP address and other technical information as part of the internet connection.
+
+---
+<br>
+
+## Safety Notice
+
+**Secuditor Lite** is digitally signed and safe for use.
+Please download the software only from the official distribution channels.
+
+Since it is based on Python code, some antivirus programs may incorrectly flag or block its operation.
+If you trust this application, you may need to create an **exception**, add it to a **whitelist** or **restore** the file from your antivirus software’s quarantine area.
+
+Microsoft Defender SmartScreen may also display a warning because **Secuditor Lite** is a new application.
+When the SmartScreen warning appears:
+1. Click **“More info”**  
+2. Verify that the **Publisher** is `Menahem Levinski`  
+3. Click **“Run anyway”**
 
 ---
 <br>
