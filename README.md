@@ -194,7 +194,7 @@ A collection of standalone Python modules and selected examples developed as par
 
 <br>
 
-The tool **Secuditor Lite** is distributed in its complete form as closed source freeware. The main application source code is not included in the **[open scripts](/open-scripts)** folder. This approach helps maintain a controlled and confidential development environment for the application's secure design and code integrity.
+The tool **Secuditor Lite** is distributed in its complete form as closed source freeware. The main application source code is confidential and is not included in the **open scripts** folder. This approach helps maintain a controlled and confidential development environment for the application's secure design and code integrity.
 
 ---
 <br>
