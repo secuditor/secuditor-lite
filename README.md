@@ -190,11 +190,11 @@ Use responsibly and in compliance with your local governance.
 
 ## Open Scripts
 
-A collection of standalone Python modules developed as part of the **Secuditor project** is available in the **[open scripts](/open-scripts)** folder, licensed under the [MIT License](/open-scripts/LICENSE.txt) (applicable only to this folder).
+A collection of standalone Python modules and selected examples developed as part of the **Secuditor project** is available in the **[open scripts](/open-scripts)** folder. These scripts represent only a portion of the project's code and are provided separately from the main application source code. They are licensed under the [MIT License](/open-scripts/LICENSE.txt) (applicable only to this folder).
 
 <br>
 
-The tool **Secuditor Lite** is distributed in its complete form as a closed source freeware to ensure secure design and code integrity which require a controlled and confidential development environment.
+The tool **Secuditor Lite** is distributed in its complete form as closed source freeware. The main application source code is not included in the **[open scripts](/open-scripts)** folder. This approach helps maintain a controlled and confidential development environment for the application's secure design and code integrity.
 
 ---
 <br>
