@@ -12,7 +12,7 @@
 <a href="#introduction"><b>Introduction</b></a> &nbsp; ✦ &nbsp;
 <a href="#presentation"><b>Presentation</b></a> &nbsp; ✦ &nbsp;
 <a href="#getting-started"><b>Download</b></a> &nbsp; ✦ &nbsp;
-<a href="#privacy-safety"><b>Privacy & Safety</b></a> &nbsp; ✦ &nbsp;
+<a href="#privacy-policy"><b>Privacy Policy</b></a> &nbsp; ✦ &nbsp;
 <a href="#open-scripts"><b>Open Scripts</b></a> &nbsp; ✦ &nbsp;
 <a href="#more-info"><b>More Info</b></a>
 </div>
@@ -135,7 +135,24 @@ The tool also detects network elements, runs internet speed tests, and generates
 ---
 <br>
 
-<a name="privacy-safety"></a>
+## Safety Notice
+
+**Secuditor Lite** is digitally signed and safe for use.
+Please download the software only from the official distribution channels.
+
+Since it is based on Python code, some antivirus programs may incorrectly flag or block its operation.
+If you trust this application, you may need to create an **exception**, add it to a **whitelist** or **restore** the file from your antivirus software’s quarantine area.
+
+Microsoft Defender SmartScreen may also display a warning because **Secuditor Lite** is a new application.
+When the SmartScreen warning appears:
+1. Click **“More info”**  
+2. Verify that the **Publisher** is `Menahem Levinski`  
+3. Click **“Run anyway”**
+
+---
+<br>
+
+<a name="privacy-policy"></a>
 
 ## Privacy Policy
 
@@ -159,19 +176,12 @@ These online checks may involve connecting to third-party servers, which may rec
 ---
 <br>
 
-## Safety Notice
+## Lawful Use
 
-**Secuditor Lite** is digitally signed and safe for use.
-Please download the software only from the official distribution channels.
-
-Since it is based on Python code, some antivirus programs may incorrectly flag or block its operation.
-If you trust this application, you may need to create an **exception**, add it to a **whitelist** or **restore** the file from your antivirus software’s quarantine area.
-
-Microsoft Defender SmartScreen may also display a warning because **Secuditor Lite** is a new application.
-When the SmartScreen warning appears:
-1. Click **“More info”**  
-2. Verify that the **Publisher** is `Menahem Levinski`  
-3. Click **“Run anyway”**
+**Secuditor Lite** is intended solely for lawful and authorized use.
+You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
+The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
+Use responsibly and in compliance with your local governance.
 
 ---
 <br>
@@ -185,16 +195,6 @@ A collection of standalone Python modules developed as part of the **Secuditor p
 <br>
 
 The tool **Secuditor Lite** is distributed in its complete form as a closed source freeware to ensure secure design and code integrity which require a controlled and confidential development environment.
-
----
-<br>
-
-## Lawful Use
-
-**Secuditor Lite** is intended solely for lawful and authorized use.
-You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
-The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
-Use responsibly and in compliance with your local governance.
 
 ---
 <br>
