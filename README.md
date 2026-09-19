@@ -177,16 +177,6 @@ These online checks may involve connecting to third-party servers, which may rec
 ---
 <br>
 
-## Lawful Use
-
-**Secuditor Lite** is intended solely for lawful and authorized use.
-You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
-The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
-Use responsibly and in compliance with your local governance.
-
----
-<br>
-
 <a name="open-scripts"></a>
 
 ## Open Scripts
@@ -196,6 +186,16 @@ A collection of standalone Python modules and selected examples developed as par
 <br>
 
 The tool **Secuditor Lite** is distributed in its complete form as closed source freeware. The main application source code is confidential and is not included in the **open scripts** folder. This approach helps maintain a controlled and confidential development environment for the application's secure design and code integrity.
+
+---
+<br>
+
+## Lawful Use
+
+**Secuditor Lite** is intended solely for lawful and authorized use.
+You must obtain explicit permission from the network owner before scanning, auditing, or testing any systems.
+The author assumes no liability for misuse or for actions that violate applicable laws or organizational policies.
+Use responsibly and in compliance with your local governance.
 
 ---
 <br>
