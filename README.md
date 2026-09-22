@@ -79,16 +79,6 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 
 ## Presentation (Windows 11)
 
-### Toolbar buttons (right to left):
-- Internet download speed measurement
-- NAT public IP and geolocation detection
-- LAN Discovery module
-- TLS Security module
-- Security Audit
-- Export summary report
-- Info and contact us
-- Menu
-
 <br>
 
 *Secuditor Lite application demo*
@@ -133,6 +123,16 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 ### 3️⃣ Navigation
 - Standard mouse left and right clicks
 - Keyboard arrow keys for navigating the categories table
+
+### 4️⃣ Toolbar buttons (right to left):
+- Internet download speed measurement
+- NAT public IP and geolocation detection
+- LAN Discovery module
+- TLS Security module
+- Security Audit
+- Export summary report
+- Info and contact us
+- Menu
 
 ---
 <br>
