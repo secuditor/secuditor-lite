@@ -140,8 +140,8 @@ The tool also detects network elements, runs internet speed tests, and generates
 **Secuditor Lite** is digitally signed and safe for use.
 Please download the software only from the official distribution channels.
 
-Since it is based on Python code, some antivirus programs may incorrectly flag or block its operation.
-If you trust this application, you may need to create an **exception**, add it to a **whitelist** or **restore** the file from your antivirus software’s quarantine area.
+Some antivirus or endpoint security products may incorrectly flag or block its operation. 
+If you trust this application, you may need to create an **exception**, add it to a **whitelist**, or **restore** the file from your antivirus software’s quarantine area.
 
 Microsoft Defender SmartScreen may also display a warning because **Secuditor Lite** is a new application.
 When the SmartScreen warning appears:
