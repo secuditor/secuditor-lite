@@ -27,7 +27,7 @@
 
 The tool also detects network elements, runs internet speed tests, and generates structured audit reports, all in one place. Suitable for both personal and organizational environments. Built for ethical security auditing.
 
-Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are detailed in the following documents.
+Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are detailed in these documents.
 
 ---
 <br>
