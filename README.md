@@ -95,6 +95,8 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
   </a>
 </p>
 
+<br>
+
 *Secuditor TLS Security module*
 <p align="center">
   <a>
