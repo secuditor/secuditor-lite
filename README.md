@@ -79,8 +79,6 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 
 ## Presentation (Windows 11)
 
-<br>
-
 *Secuditor Lite application demo*
 <p align="center">
   <a>
