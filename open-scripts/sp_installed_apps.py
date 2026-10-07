@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Outputs a list of applications installed on the device.
@@ -39,7 +39,7 @@ def get_installed_apps():
 # --- Output ---
 if __name__ == "__main__":
     apps = get_installed_apps()
-    print("Installed Applications Report")
+    print("\nInstalled Applications Report")
     print("–" * len("Installed Applications Report"))
     print("")
 

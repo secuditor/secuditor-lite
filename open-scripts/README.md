@@ -1,6 +1,6 @@
 # Secuditor Lite - Open Scripts
 
-A collection of standalone Python modules developed as part of the **Secuditor project**. All **modules** in this folder are **open-source** and **[MIT licensed](/open-scripts/LICENSE.txt)**, some modules may require the installation of third party dependencies.
+A collection of standalone Python modules and selected examples developed as part of the **Secuditor project**. All **modules** in this folder are **open-source** and **[MIT licensed](/open-scripts/LICENSE.txt)**, some modules may require the installation of third party dependencies.
 
 For the full application, visit **[Secuditor Lite](https://github.com/secuditor/secuditor-lite)**, distributed separately as closed-source **freeware**.
 
@@ -19,6 +19,7 @@ These tools are intended solely for lawful and authorized use. You must obtain e
 - [sp_endpoint_security.py](sp_endpoint_security.py) – Reviews core Windows endpoint security posture settings
 - [sp_hash_checksum.py](sp_hash_checksum.py) – Calculates cryptographic file hashes for integrity verification
 - [sp_installed_apps.py](sp_installed_apps.py) – Outputs a list of applications installed on the device
+- [sp_lan_discovery.py](sp_lan_discovery.py) – LAN discovery, open port auditing, and local network device detection.
 - [sp_network_settings.py](sp_network_settings.py) – Presents the device's network adapters and configurations
 - [sp_password_policy.py](sp_password_policy.py) – Evaluates local and domain affiliated password policies
 - [sp_remote_access.py](sp_remote_access.py) – Detects remote access capabilities and services exposure

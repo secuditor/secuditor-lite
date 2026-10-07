@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Calculates cryptographic file hashes for integrity verification.
@@ -50,7 +50,7 @@ def generate_hash_report(file_path, output_json=False):
 
 # --- Output ---
 if __name__ == "__main__":
-    print("🔍 Generating Checksum Report")
+    print("\n🔍 Generating Checksum Report")
     print(generate_hash_report(FILE_PATH))
 
     os.system("pause")

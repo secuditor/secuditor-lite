@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Presents the device's network adapters and configurations (dual-stack).
@@ -254,7 +254,7 @@ def get_network_settings():
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Network Settings Report")
+    print("\nNetwork Settings Report")
     print("–" * len("Network Settings Report"))
     print(get_network_settings())
     print("")

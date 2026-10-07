@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Mapping shared folders on the device (requires admin permissions).
@@ -10,10 +10,14 @@ Mapping shared folders on the device (requires admin permissions).
 
 import ctypes
 import win32security
-import win32con as con
 import pythoncom
 import wmi
 import os
+
+FILE_GENERIC_READ = 0x120089
+FILE_GENERIC_WRITE = 0x120116
+FILE_GENERIC_EXECUTE = 0x1200A0
+FILE_ALL_ACCESS = 0x1F01FF
 
 # --- Get shared folders ---
 # --- Check if script runs as admin ---
@@ -55,13 +59,13 @@ def get_permissions(folder_path):
                     continue  # skip these accounts
 
                 rights = []
-                if access_mask & con.FILE_GENERIC_READ:
+                if access_mask & FILE_GENERIC_READ:
                     rights.append("Read")
-                if access_mask & con.FILE_GENERIC_WRITE:
+                if access_mask & FILE_GENERIC_WRITE:
                     rights.append("Write")
-                if access_mask & con.FILE_GENERIC_EXECUTE:
+                if access_mask & FILE_GENERIC_EXECUTE:
                     rights.append("Execute")
-                if access_mask & con.FILE_ALL_ACCESS:
+                if access_mask & FILE_ALL_ACCESS:
                     rights = ["Full Control"]
 
                 perms.append(f"{account}: {', '.join(rights) if rights else 'Special Permissions'}")
@@ -123,7 +127,7 @@ def get_shared_folders():
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Shared Folders Mapping")
+    print("\nShared Folders Mapping")
     print("–" * len("Shared Folders Mapping"))
     print(get_shared_folders())
     print("")

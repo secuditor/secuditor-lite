@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Identifies domain affiliation and discovers related settings.
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     print("–" * len("Domain Settings Report"))
 
     if running_in_idle():
-        print("Working... (please wait)")
+        print("\nWorking... (please wait)")
         report = get_domain_settings()
     else:
         spinner = Spinner("Working")

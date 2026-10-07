@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Reviews core Windows endpoint security posture settings.
@@ -695,7 +695,7 @@ def format_security_settings(settings):
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Endpoint Security Report")
+    print("\nEndpoint Security Report")
     print("–" * len("Endpoint Security Report"))
 
     if running_in_idle():

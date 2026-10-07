@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Audits Windows credential protection mechanisms.
@@ -282,7 +282,7 @@ def run_credential_integrity_checks():
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Credential Integrity Report")
+    print("\nCredential Integrity Report")
     print("–" * len("Credential Integrity Report"))
     print(run_credential_integrity_checks())
     print("")

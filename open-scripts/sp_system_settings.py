@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Presents a detailed report of the system's settings and inventory.
@@ -201,7 +201,7 @@ def get_hardware_report():
 
 # --- Output ---
 if __name__ == "__main__":
-    print("System & Hardware Report")
+    print("\nSystem & Hardware Report")
     print("–" * len("System & Hardware Report"))
     print(get_formatted_system_settings())
     print(get_hardware_report())

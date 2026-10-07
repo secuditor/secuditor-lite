@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Evaluates local and domain affiliated password policies.
@@ -154,7 +154,7 @@ def format_password_policy(policy):
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Password Policy Report")
+    print("\nPassword Policy Report")
     print("–" * len("Password Policy Report"))
     print(get_password_policy_nonadmin())
     print("")

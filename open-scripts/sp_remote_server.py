@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Inspects the system for server side remote features.
@@ -874,7 +874,7 @@ def format_remote_server_settings(settings):
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Remote Server Report")
+    print("\nRemote Server Report")
     print("–" * len("Remote Server Report"))
 
     if running_in_idle():

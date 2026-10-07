@@ -1,4 +1,4 @@
-# MIT License – Copyright (c) 2025 Menahem Levinski
+# MIT License – Copyright (c) 2026 Menahem Levinski
 
 """
 Detects remote access capabilities and services exposure.
@@ -644,7 +644,7 @@ def format_remote_access_settings(settings):
 
 # --- Output ---
 if __name__ == "__main__":
-    print("Remote Access Report")
+    print("\nRemote Access Report")
     print("–" * len("Remote Access Report"))
     
     if running_in_idle():
