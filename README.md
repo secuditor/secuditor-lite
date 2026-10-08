@@ -210,7 +210,7 @@ secuditor-lite/                   # Main project folder
 ├── CHANGELOG.md                  # Project change log
 ├── CONTRIBUTING.md               # Contribution guidelines
 ├── LICENSE.txt                   # License file
-├── PRIVACY.txt                   # Privacy Policy
+├── PRIVACY.md                    # Privacy Policy
 ├── README.md                     # Project overview
 ├── SECURITY.md                   # Security policy
 ├── SECURITY_CHECKLIST.md         # Security Checks & Diagnostics
