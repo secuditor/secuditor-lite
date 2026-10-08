@@ -15,7 +15,8 @@ The application may periodically communicate with our secure servers to:
 
 These connections transmit only non-personal, technical data (e.g., version identifiers or checksum values).
 
-When **Secuditor Lite** communicates with our servers, our systems may temporarily log the public IP address associated with your internet connection.
+When Secuditor Lite communicates with our servers, our systems may temporarily log the public IP address associated with your internet connection.
+This information may be recorded as part of normal server and network operations, such as processing update requests, delivering security resources, or maintaining service reliability.
 
 Third-party online checks, such as public IP lookups, NAT checks, TLS/SSL security checks, external connection analysis, and other online diagnostic checks, may be performed automatically as part of a security audit or when explicitly initiated by you.
 These checks may involve connecting to third-party servers, which may receive your public IP address and other technical information normally transmitted as part of an Internet connection.
