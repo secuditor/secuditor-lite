@@ -21,12 +21,12 @@ import concurrent.futures
 import threading
 import itertools
 import psutil
+import ctypes
 import uuid
 
 from typing import List, Dict, Iterable, Optional
 
 log_buffer = io.StringIO()
-now = datetime.datetime.now().replace(microsecond=0)
 
 # ====== Logger Setup =======
 def setup_logger(level=logging.INFO, logfile: Optional[str] = None):
@@ -48,8 +48,6 @@ def setup_logger(level=logging.INFO, logfile: Optional[str] = None):
     handlers.append(sh)
 
     logging.basicConfig(level=level, handlers=handlers)
-
-
 
 # ======= LAN scanning configs =======
 # Default common ports to check quickly
@@ -87,12 +85,6 @@ def _run_check_output(cmd, shell=False, **kwargs) -> str:
     base_kwargs.update(kwargs)
     return subprocess.check_output(cmd, **base_kwargs)
 
-def _run_subprocess_run(cmd, shell=False, **kwargs) -> subprocess.CompletedProcess:
-    base_kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "shell": shell}
-    base_kwargs.update(_subproc_kwargs_hide_window())
-    base_kwargs.update(kwargs)
-    return subprocess.run(cmd, **base_kwargs)
-
  # ======= Spinner (moving dots) =======
 class Spinner:
     """Simple console spinner/dots animation in a separate thread."""
@@ -119,15 +111,12 @@ class Spinner:
 
 # ===== CLASS LAN Scanning =====
 class LanScan:
-    def __init__(self):
-        self.lan_scaning = None
 
     # --- Console helper ---
-    def ensure_console(self, title: str = "Secuditor LAN Scanner"):
+    def ensure_console(self, title: str = "Secuditor LAN Discovery"):
         """Ensure a console is available on Windows with black background / white text."""
         if sys.platform.startswith("win"):
             try:
-                import ctypes
                 kernel32 = ctypes.windll.kernel32
 
                 ATTACH_PARENT_PROCESS = -1
@@ -173,44 +162,9 @@ class LanScan:
         "::",
     )
 
-    def _is_noise_traffic(self, conn) -> bool:
-        try:
-            if conn.status not in ("ESTABLISHED", "CLOSE_WAIT", "SYN_SENT", "LISTEN"):
-                return True
-
-            l_ip = conn.laddr.ip if conn.laddr else ""
-            r_ip = conn.raddr.ip if conn.raddr else ""
-
-            l_port = conn.laddr.port if conn.laddr else 0
-
-            # DROP IPv6 LINK-LOCAL NOISE
-            if isinstance(l_ip, str) and l_ip.startswith("fe80:"):
-                return True
-            if isinstance(r_ip, str) and r_ip.startswith("fe80:"):
-                return True
-
-            # IPv6 multicast / local service noise
-            if l_ip in ("::", "::1"):
-                return True
-
-            # IPv4 noise ranges
-            if l_ip.startswith(("127.", "169.254.")):
-                return True
-
-            # Service discovery ports
-            if l_port in NOISE_PORTS:
-                return True
-
-            # UDP broadcast noise
-            if conn.type == socket.SOCK_DGRAM and not conn.raddr:
-                return True
-
-            return False
-
-        except Exception:
-            return True
-
-    def _get_default_interface_and_ip(self) -> (Optional[str], Optional[str]):
+    def _get_default_interface_and_ip(
+        self,
+    ) -> tuple[Optional[str], Optional[str]]:
         """
         Detect the real default network adapter and its IPv4 address.
         Uses routing table via psutil (already imported).
@@ -305,20 +259,6 @@ class LanScan:
                     open_ports.append(res)
 
         return sorted(open_ports)
-
-    def discover_hosts(self, subnet: ipaddress.IPv4Network, max_workers: int = 100, tcp_ports=None, timeout: float = 0.1) -> List[str]:
-        """
-        Detect alive hosts in the subnet using TCP ports first, then optional ping fallback.
-        Returns list of IPs that respond and (on Windows) have a MAC in ARP table.
-        """
-        if tcp_ports is None:
-            tcp_ports = [22, 53, 80, 139, 443, 445, 3389]
-
-        ips = [str(ip) for ip in subnet.hosts()]
-        if not ips:
-            return []
-
-        ip_mac = self._parse_arp_table()  # prefetch ARP once
 
         def _check_ip(ip):
             # 1️⃣ TCP check
@@ -472,30 +412,6 @@ class LanScan:
         mapping = {}
         return [f"{p}({mapping.get(p,'')})" if p in mapping else str(p) for p in ports]
 
-    def _first_interface(self) -> Optional[str]:
-        """Return the first non-loopback interface name on Linux or Windows."""
-        system = platform.system().lower()
-        try:
-            if system == "linux":
-                out = subprocess.check_output(["ip", "link"], text=True)
-                m = re.findall(r"^\d+: (\S+):", out, re.MULTILINE)
-                for iface in m:
-                    if iface != "lo":
-                        return self._limit_str(iface)
-            elif system == "windows":
-                cmd = [
-                    "powershell",
-                    "-Command",
-                    "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} "
-                    "| Select-Object -First 1 -ExpandProperty Name"
-                ]
-                out = subprocess.check_output(cmd, text=True).strip()
-                if out:
-                    return self._limit_str(out)
-        except Exception:
-            return None
-        return None
-
     def _primary_mac(self) -> Optional[str]:
         """Return primary system MAC address (best-effort, cross-platform)."""
         try:
@@ -632,8 +548,6 @@ class LanScan:
                 log_file = "scan.log"
 
         setup_logger(level=log_level, logfile=log_file)
-
-        self.scan_lock = threading.Lock()
 
         # --- Detect local interface/IP ---
         interface, local = self._get_default_interface_and_ip()
