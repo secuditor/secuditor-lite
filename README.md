@@ -112,7 +112,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 ## Getting Started
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.3.0..zip](https://github.com/secuditor/secuditor-lite/releases/download/2.3.0/SecuditorLite_2.3.0.zip) (22 MB)
+- #### [SecuditorLite_2.3.0.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.3.0/SecuditorLite_2.3.0.zip) (22 MB)
 - **SHA-256:** 0e2234106eebe4e0ed4c6ac71cfb8d37358676100cbe33051bc5aca058e9ee31
 
 ### 2️⃣ Extract & Run
