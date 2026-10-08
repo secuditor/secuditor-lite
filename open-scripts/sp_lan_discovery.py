@@ -3,10 +3,8 @@
 """
 - LAN discovery, open port auditing, and local network device detection.
 
-Requirements:
- - Python 3.0+
- - pip install psutil
- - pip install requests
+Dependencies:
+ - psutil
 """
 
 import io
