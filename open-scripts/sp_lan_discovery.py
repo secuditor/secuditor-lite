@@ -3,8 +3,7 @@
 """
 - LAN discovery, open port auditing, and local network device detection.
 
-Dependencies:
- - psutil
+Third-party: psutil
 """
 
 import io
