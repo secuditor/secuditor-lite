@@ -34,7 +34,6 @@ You can help in the following ways:
 
 * Bug fixes
 * Performance improvements
-* Cross-platform compatibility enhancements
 * Refactoring for readability and maintainability
 * Adding safe, ethical diagnostic features
 

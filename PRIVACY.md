@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **Secuditor Lite** is an open-source, diagnostic security tool that runs locally on your device.
-It does not intentionally intentionally collect or transmit locally analyzed system information to Secuditor servers. Certain application services and diagnostic features may communicate with external servers as described in this policy.
+It does not intentionally collect or transmit locally analyzed system information to Secuditor servers. Certain application services and diagnostic features may communicate with external servers as described in this policy.
 The application is designed to minimize external communication and keep security analysis within the local environment.
 
 ## Local Data Processing
