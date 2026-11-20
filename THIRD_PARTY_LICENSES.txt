@@ -52,6 +52,34 @@ Copyright (c) The cryptography developers
 Source: https://github.com/pyca/cryptography/
 
 ------------------------------------------------------------
+urllib3
+------------------------------------------------------------
+MIT License
+Copyright (c) 2008-2025 Andrey Petrov and contributors.
+Source: https://github.com/urllib3/urllib3/
+
+------------------------------------------------------------
+certifi
+------------------------------------------------------------
+Mozilla Public License 2.0
+Copyright (c) 2017-2025 Kenneth Reitz and contributors.
+Source: https://github.com/certifi/python-certifi/
+
+------------------------------------------------------------
+charset-normalizer
+------------------------------------------------------------
+MIT License
+Copyright (c) 2019-2025 Ousret and contributors.
+Source: https://github.com/jawah/charset_normalizer/
+
+------------------------------------------------------------
+idna
+------------------------------------------------------------
+BSD 3-Clause License
+Copyright (c) 2013-2025 Kim Davies and contributors.
+Source: https://github.com/kjd/idna/
+
+------------------------------------------------------------
 Tcl/Tk (via Tkinter)
 ------------------------------------------------------------
 BSD-style License

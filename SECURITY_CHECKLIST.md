@@ -1,4 +1,4 @@
-# Secuditor Lite 2.3.5 – Security Checks & Diagnostics
+# Secuditor Lite 2.4.0 – Security Checks & Diagnostics
 
 This file lists the structured and comprehensive security audit elements that **Secuditor Lite** checks on Windows systems, helping identify misconfigurations, vulnerabilities, and potential risks across **endpoint, network, and operational security layers**.
 
@@ -6,27 +6,32 @@ For complete and accurate results, the tool should be run with **administrator p
 
 ---
 
+### 🏠 Welcome / Home Screen Live Telemetry
+- Live Endpoint Security summary (Active/Inactive Antivirus & Host-based Firewall status)
+- Operating system label with live CPU Usage, Memory Usage, and Disk Usage bars (highlighting >= 90.0% usage)
+- Live SSL/TLS Interception diagram (Verified Direct TLS, Authorized Inspection, Untrusted / MITM, or Handshake Failed)
+
+---
+
 ### 🖥️ System Overview
-- Hostname, operating system, and firmware detection
+- Hostname, Windows OS/edition, and firmware detection (UEFI / Legacy BIOS)
 - System architecture (x86/x64/ARM) and processor identification
 - CPU core count, thread count, and total memory (RAM) capacity
-- Disk structure overview including partitions, and storage
+- Disk structure overview including partitions, and storage usage
 
 ---
 
 ### 🔌 Hardware Analysis
 - Detection of connected hardware components and devices
 - USB devices enumeration including storage, input, and peripheral
-- Biometric hardware detection (fingerprint readers, IR cameras)
+- Biometric hardware detection (fingerprint readers, cameras)
 - Network interfaces enumeration including physical and virtual adapters
 
 ---
 
 ### 🌐 Network Configuration
 - Local IP address enumeration (IPv4 and IPv6)
-- Subnet mask and network segmentation details
-- Default gateway identification and overview
-- DHCP and DNS server detection and analysis
+- Default gateway, Subnet mask, DHCP and DNS server detection
 - Network interface status (Wi-Fi, Ethernet, virtual adapters)
 
 ---
@@ -36,22 +41,21 @@ For complete and accurate results, the tool should be run with **administrator p
 - Analysis of access permissions (read / write / full control)
 - Identification of overly permissive or exposed shares
 - Mapping of shared resources across the system
-- Helps detect potential data exposure and unauthorized access risks
 
 ---
 
 ### 🛰️ Gateway Discovery
-- Gateway vendor identification via MAC OUI lookup
-- Default gateway MAC and IP address mapping
-- NAT environment and VPN/Proxy detection
-- Gateway testing using ICMP (ping) and HTTP probing
-- Public IP identification and geolocation check
+- Default gateway IPv4/IPv6 discovery, ICMP ping check, network CIDR, and interface MTU
+- Gateway MAC resolution, OUI vendor lookup, and HTTP/WebGUI fingerprint classification
+- Exposed gateway management port scan (FTP, SSH, Telnet, HTTP, HTTPS, SMB, WinBox, alt-HTTP, etc.)
+- Gateway proxy indicator, NAT check (api.ipify.org), public IP check, and VPN interface detection
+- NAT environment, VPN/Proxy detection and Public IP identification and geolocation check
 
 ---
 
 ### 🔍 LAN Scanning and Traffic Flow
-- IPv4-based local network device discovery
-- Vendor identification via MAC address OUI
+- IPv4-based incremental local network device discovery
+- MAC address vendor identification using a local OUI database
 - Detection of common open ports and exposed network services
 - Network traffic flow analysis by process, port, protocol, and direction
 - Identification of active connections and potentially unusual network activity
@@ -59,34 +63,31 @@ For complete and accurate results, the tool should be run with **administrator p
 ---
 
 ### 🛡️ Endpoint Security Settings
-- Antivirus / Endpoint protection status
-- Firewall status (On / Off) and activity
-- Auto screen lock configuration review
-- User Account Control (UAC) settings
-- Core isolation and memory protection
-- Attack Surface Reduction (ASR) rules
+- Antivirus & third-party Endpoint Protection status
+- Host-based Firewall status (On / Off) and activity
+- Auto Screen Lock timeout & lock-on-resume configuration
+- User Account Control (UAC) prompt policy
+- Core Isolation / Memory Integrity (HVCI)
+- Microsoft Defender Attack Surface Reduction (ASR) rules summary
 - PowerShell execution policy review
-- Windows Anonymous Access status check
-- Data Execution Prevention (DEP) status
-- Disk encryption (BitLocker) status
-- Office macro security policy review
-- Removable storage status check
-- USB Autorun configuration check
-- Secure Boot configuration check
-- System Restore point availability
+- Windows Anonymous Access restrictions
+- Data Execution Prevention (DEP) support policy
+- BitLocker Drive Encryption status across fixed volumes
+- Office macro security policy (VBAWarnings)
+- Removable storage (USBSTOR) and USB AutoRun (NoDriveTypeAutoRun) checks
+- UEFI Secure Boot configuration check
+- Windows System Restore status and policy
 
 ---
 
 ### 🌍 Remote Access & Exposure
-- Remote Desktop and Remote Assistance status
-- PowerShell remoting configuration analysis
-- RPC Print Spooler and remote service exposure
-- DCOM Service vulnerability analysis
-- Rsync, NetBIOS, UPnPHost, and Bluetooth exposure
-- WinRM configuration and risk level analysis
-- SMB protocol version analysis (SMBv1/SMBv2)
-- FTP service detection using multiple methods
-- Remote Registry service configuration check
+- Remote Desktop (RDP) status, Network Level Authentication (NLA)
+- PowerShell Remoting (WinRM) service, listener, and remote shell
+- RPC Print Spooler (RpcEnabled & service exposure)
+- DCOM configuration, authentication level, and hardening flag check
+- NetBIOS over TCP/IP, UPnPHost, Remote Registry, FTP, Rsync, and Bluetooth exposure + driver signature status
+- SMBv1 optional feature / driver state and SMBv2/v3 signing, encryption, and null-session hardening check
+- Remote Registry service configuration check and WinRM configuration and risk level analysis
 
 ---
 
@@ -103,44 +104,47 @@ For complete and accurate results, the tool should be run with **administrator p
 - Password length, complexity, and character requirement validation
 - Password expiration, history, and reuse policy analysis
 - Account lockout thresholds, reset timers, and lockout duration review
-- Multi-factor authentication (MFA) capability and enforcement detection
 - Identification of weak or legacy authentication configurations
 - Overall assessment of domain-level password policy strength
 
 ---
 
 ### 🧩 OS Version & Update Status
-- Windows version, edition, and build identification
-- Installed updates inventory (cumulative and security updates)
-- Pending updates detection (Windows Update queue analysis)
-- Patch level assessment against latest known security baseline
+- Detecting Windows version, edition, build and revision (UBR) identification
+- Listing installed updates inventory (cumulative and security updates)
+- Presenting build comparison against Microsoft's release-health baselines
 
 ---
 
+### 🔀 Proxy Configuration & SSL/TLS Interception
+- Audits WinINet (ProxyEnable, ProxyServer, AutoConfigURL, AutoDetect / WPAD), WinHTTP proxy, environment proxy variables
+- Flags unexpected or suspicious SOCKS/Tor listeners, local MITM/tunnel tools (mitmproxy, Fiddler, Burp, ngrok, chisel, etc.)
+---
 ### 🔐 SSL Interception Module
-- Certificate key types and strength (RSA/ECDSA) against minimum security thresholds
-- SSL/TLS interception and potential man-in-the-middle (MITM) inspection
-- Supported TLS version detection, including deprecated Ciphers
+- Two-stage TLS certificate verification against the Windows OS trust store and Mozilla/WebPKI (certifi) roots
+- SSL/TLS interception and potential man-in-the-middle (MITM) inspection, negotiated TLS version, and key strength
+- Detects trusted enterprise SSL/TLS inspection vs untrusted MITM interception, CN/SAN mismatches, weak signature algorithms
 
 ---
 
 ### 💾 Sensitive Data Exposure
 - Detection of sensitive system and directory service files (e.g., *.dit, *.ldf, *.mdf, *.ndf, *.edb)
 - Identification of potentially exposed database files (e.g., *.sqlite, *.sqlite3, *.db, *.ibd, *.myd, *.myi)
-- Risk assessment of critical system paths, categorized as high or low risk
+- Evaluates file permissions (Everyone access), lock state, and exposed paths while filtering known benign OS metadata files
 
 ---
 
 ### ⚙️ Process & Connection
-- Detection of suspicious processes based on behavior and execution patterns
-- Digital signature validation of active non-system processes
-- Analysis of active network connections, including local and external endpoints
+- Detection of suspicious processes and binaries based on behavior and execution patterns
+- Digital signature validation of active processes, including non-system processes and official Windows system processes.
 - Correlation of processes with network activity to identify suspicious communications
 - Detection of unusual external connections, including connections involving commonly abused ports
+- DLL/module anomalies, high file entropy, small suspicious binaries,persistence (Scheduled Tasks / Registry Run keys)
+- LOLBin network/cmdline activity, wildcard listeners, and outbound connections on flagged remote ports
 
 ---
 
 ### 📜 Event Log Analysis
-- Windows System and Security Event Logs, including selected Event IDs
+- Basic analysis for Windows System and Security Event Logs, including selected Event IDs
 - Audit of login activity, including successful and failed sign-in attempts
 - Summarization of security-related events to help identify potential incidents

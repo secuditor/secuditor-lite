@@ -3,7 +3,20 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.3.5] – 2026-10-28 Latest
+## [2.4.0] – 2026-11-20 Latest
+- Added live interception, security and system checks to the home screen
+- Added management port detection to the network gateway analysis
+- Added a proxy detection module to identify potentially suspicious proxies
+- Added a GUI search bar to find specific content in output and reports
+- Added compatibility updates for Windows 11, version 26H2
+- Major code cleanup, bug fixes, improvements, and performance optimizations
+- Security optimizations and application code hardening
+- Fixed a false detection of the System Restore settings
+- Fixed an issue causing unwanted CLI windows to appear
+
+---
+
+## [2.3.5] – 2026-10-28
 - Added a Windows Anonymous Access service configuration check
 - Added a Remote Registry service configuration check
 - Added driver signature validation to the Bluetooth security check
@@ -223,7 +236,7 @@ All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
 
-## [2.0.3] – 2025-30-27
+## [2.0.3] – 2025-12-27
 - Added NetBIOS protocol check
 - Added Certificate Authority (CA) server feature check
 - Added DFS-R server feature check

@@ -2,7 +2,7 @@
 
 <div align="center" style="line-height: 0;">
   <a href="https://github.com/secuditor/secuditor-lite">
-    <img src="media/Secuditor-logo-transparent2.png" alt="Secuditor Diagnostic Security Tool logo" width="200" height="200">
+    <img src="img/Secuditor-logo-transparent2.png" alt="Secuditor Diagnostic Security Tool logo" width="200" height="200">
   </a>
 </div>
 
@@ -13,7 +13,7 @@
 <a href="#presentation"><b>Presentation</b></a> &nbsp; ✦ &nbsp;
 <a href="#getting-started"><b>Download</b></a> &nbsp; ✦ &nbsp;
 <a href="#safety-ethics"><b>Safety & Ethics</b></a> &nbsp; ✦ &nbsp;
-<a href="#open-scripts"><b>Open Scripts</b></a> &nbsp; ✦ &nbsp;
+<a href="#open-source"><b>Open Source</b></a> &nbsp; ✦ &nbsp;
 <a href="#more-info"><b>More Info</b></a>
 </div>
 
@@ -28,7 +28,7 @@
 
 The tool also detects network elements, runs internet speed tests, and generates structured audit reports, all in one place. Suitable for both personal and organizational environments. Built for ethical security auditing.
 
-Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are detailed in these documents.
+Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are detailed in these documents.
 
 ---
 <br>
@@ -82,7 +82,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 *Secuditor Lite summary report*
 <p align="center">
   <a>
-    <img src="media/secuditor-summary-report.png" alt="Secuditor Lite summary report" />
+    <img src="img/secuditor-summary-report.png" alt="Secuditor Lite summary report" />
   </a>
 </p>
 
@@ -91,7 +91,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 *Secuditor Traffic Flow module*
 <p align="center">
   <a>
-    <img src="media/secuditor-traffic-flow-prod.png" alt="Secuditor Traffic Flow module" />
+    <img src="img/secuditor-traffic-flow-prod.png" alt="Secuditor Traffic Flow module" />
   </a>
 </p>
 
@@ -100,7 +100,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 *Secuditor LAN Discovery module*
 <p align="center">
   <a>
-    <img src="media/secuditor-lan-discovery-prod.png" alt="Secuditor LAN Discovery module" />
+    <img src="img/secuditor-lan-discovery-prod.png" alt="Secuditor LAN Discovery module" />
   </a>
 </p>
 
@@ -109,11 +109,11 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 
 <a name="getting-started"></a>
 
-## Getting Started
+## Getting Started – Windows Release
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.3.5.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.3.5/SecuditorLite_2.3.5.zip) (21.2 MB)
-- **SHA-256:** 63d2daa92bf8c42949a24047ffe2da5a9b68d38be59136743b406887fa0968b0
+- #### [SecuditorLite_2.4.0.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.4.0/SecuditorLite_2.4.0.zip) (21.2 MB)
+- **SHA-256:** 65e1fdfb5e480ebb99f4a00c2498ef54f300bc97b6079a610040050500aca843
 
 ### 2️⃣ Extract & Run
 - Unzip the file
@@ -132,6 +132,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 - Security Audit
 - Export report
 - About
+- Home
 - Menu
 
 ---
@@ -141,17 +142,23 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are are d
 
 ## Safety Notice
 
-**Secuditor Lite** is digitally signed and safe for use.
-Please download the software only from the official distribution channels.
+Secuditor Lite is an open-source, digitally signed security diagnostic tool for Windows.
 
-Some antivirus or endpoint security products may incorrectly flag or block its operation. 
-If you trust this application, you may need to create an **exception**, add it to a **whitelist**, or **restore** the file from your antivirus software’s quarantine area.
+For your security, download the software only from the official distribution channels listed on our website or the project's official GitHub repository.
 
-Microsoft Defender SmartScreen may also display a warning because **Secuditor Lite** is a new application.
-When the SmartScreen warning appears:
-1. Click **“More info”**  
-2. Verify that the **Publisher** is `Menahem Levinski`  
-3. Click **“Run anyway”**
+Some antivirus or endpoint security products may incorrectly flag or block the application (false positive detections).
+
+If you believe the detection is incorrect, verify the application's digital signature and download source before considering an antivirus exception or restoring the file from quarantine. If you are unsure, contact the developer.
+
+### Microsoft Defender SmartScreen
+
+Microsoft Defender SmartScreen may display a warning when running Secuditor Lite because it is a relatively new application and may not yet have established sufficient reputation.
+
+If you encounter a SmartScreen warning:
+
+1. Click **More info**.
+2. Verify that the publisher is **Menahem Levinski**.
+3. If you trust the application, click **Run anyway** to proceed.
 
 ---
 <br>
@@ -166,15 +173,76 @@ Use responsibly and in compliance with your local governance.
 ---
 <br>
 
-<a name="open-scripts"></a>
+<a name="open-source"></a>
 
-## Open Scripts
+## Open Source
 
-A collection of standalone Python modules and selected examples developed as part of the **Secuditor project** is available in the **[open scripts](/open-scripts)** folder. These scripts represent only a portion of the project's code and are provided separately from the main application source code. They are licensed under the [MIT License](/open-scripts/LICENSE.txt) (applicable only to this folder).
+Secuditor Lite is now open-source! You can explore, review, and contribute to the source code available in the **[src](./src/)** folder.
 
-<br>
+Contributions, suggestions, and bug reports are welcome (please see our **[Contributing](./CONTRIBUTING.md)** guidelines).
 
-The tool **Secuditor Lite** is distributed in its complete form as closed source freeware. The main application source code is confidential and is not included in the **open scripts** folder. This approach helps maintain a controlled and confidential development environment for the application's secure design and code integrity.
+### Requirements
+
+- `Windows 10` or `Windows 11`
+- `Python 3.10` or later (tested with `Python 3.13.5`)
+
+
+### Python Dependencies
+
+The following third-party packages are required:
+
+```text
+requests>=2.32.0
+urllib3>=2.0.0
+certifi>=2024.0.0
+psutil>=5.9.0
+cryptography>=42.0.0
+pywin32>=306; sys_platform == "win32"
+WMI>=1.5.1; sys_platform == "win32"
+```
+
+### Running from Source
+
+To run Secuditor Lite directly from Python:
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/secuditor/secuditor-lite.git
+```
+
+2. Navigate to the project directory:
+
+```bash
+cd secuditor-lite
+```
+
+3. Install the required dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+4. Run the application:
+
+```bash
+python src/secuditor_lite_main.py
+```
+
+**Note:** Some security checks and system operations may require administrator privileges.
+
+For more technical details about the application architecture, modules, and implementation, see **[TECHNICAL_OVERVIEW.md](./TECHNICAL_OVERVIEW.md)**.
+
+Secuditor Lite's original source code is distributed under the MIT License.
+
+The Secuditor name, logos, and original branding elements are not included in the MIT License.
+
+Third-party packages and bundled assets remain subject to their respective licenses and attribution requirements.
+
+See the following files for details:
+
+- **[LICENSE.txt](./LICENSE.txt)** – MIT License and branding restrictions.
+- **[THIRD_PARTY_LICENSES.txt](./THIRD_PARTY_LICENSES.txt)** – Third-party licenses and attributions.
 
 ---
 <br>
@@ -187,8 +255,8 @@ The tool **Secuditor Lite** is distributed in its complete form as closed source
 - **[Contributing](CONTRIBUTING.md)**
 - **[Privacy Policy](PRIVACY.md)**
 - **[Security Policy](SECURITY.md)**
-- **[Software License](LICENSE.txt)**
-- **[Third Party Licenses](THIRD_PARTY_LICENSES.txt)**
+- **[TECHNICAL_OVERVIEW.md](./TECHNICAL_OVERVIEW.md)**
+
 <br>
 
 - **Website:** [secuditor.com](https://secuditor.com/)
@@ -200,21 +268,31 @@ The tool **Secuditor Lite** is distributed in its complete form as closed source
 
 ## 📁 Project Structure
 
-```bash
-secuditor-lite/                   # Main project folder
+```text
+secuditor-lite/                       # Main repository root
 │
-├── media/                        # Media assets (images, GIFs)
+├── img/                              # Documentation screenshots & logo
 │
-├── open-scripts/                 # Open source Python scripts
+├── src/                              # Application source code & assets
+│   ├── data/sec.json                 # Detection patterns, paths & CA/issuer lists
+│   ├── icons/                        # GUI & tree icons
+│   ├── icon.ico                      # Application icon
+│   ├── secuditor_lite_main.py        # Main Tkinter GUI & scoring engine
+│   ├── secuditor_modules.py          # Windows system, security & update audits
+│   ├── secuditor_scanners.py         # SSL/TLS, proxy, process & path scanners
+│   ├── secuditor_utilities.py        # Traffic Flow, LAN Scanner, NAT & Speed Test
+│   └── secuditor_loader.py           # Local OUI SQLite cache updater
 │
-├── CHANGELOG.md                  # Project change log
-├── CONTRIBUTING.md               # Contribution guidelines
-├── LICENSE.txt                   # License file
-├── PRIVACY.md                    # Privacy Policy
-├── README.md                     # Project overview
-├── SECURITY.md                   # Security policy
-├── SECURITY_CHECKLIST.md         # Security Checks & Diagnostics
-└── THIRD_PARTY_LICENSES.txt      # Third party licenses
+├── CHANGELOG.md                      # Project change log
+├── CONTRIBUTING.md                   # Contribution guidelines
+├── LICENSE.txt                       # MIT License + branding terms
+├── PRIVACY.md                        # Privacy Policy
+├── README.md                         # Project overview
+├── requirements.txt                  # Python dependencies
+├── SECURITY.md                       # Security policy
+├── SECURITY_CHECKLIST.md             # Security Checks & Diagnostics
+├── TECHNICAL_OVERVIEW.md             # Architecture documentation
+└── THIRD_PARTY_LICENSES.txt          # Third-party licenses
 ```
 
 ---

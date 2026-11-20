@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-**Secuditor Lite** is distributed as a freeware executable for Windows platforms.
+**Secuditor Lite** is distributed as a open-source application for Windows platforms.
 
 Only the **latest released version** of Secuditor Lite is supported with security fixes and updates.
 

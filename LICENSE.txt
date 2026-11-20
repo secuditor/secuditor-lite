@@ -1,49 +1,30 @@
 Copyright (c) 2026 Menahem Levinski
 
-Please read this agreement before using the software:
+1. MIT License
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This License Agreement (“Agreement”) is between the person using the software (“User”) and Menahem Levinski, owner of the domain “secuditor.com” (“Licensor”), regarding the use of Secuditor Lite (“Software”).
-By installing or using the Software, you agree to the terms of this Agreement. If you do not agree to these terms, please do not install or use the Software.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-1. Grant of License
-- Licensor grants User a non-exclusive, non-transferable, royalty-free license to use the Software for personal and organizational purposes.
-- This Software is provided as freeware. No fees are charged for this edition.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-2. Restrictions
-User may not:
-- Modify, adapt, redesign, reverse engineer, decompile, or disassemble the Software.
-- Rent, lease, sell, sublicense, distribute, or otherwise make the Software available to any third party.
-- Use the Software for any unlawful, unethical, or unauthorized purpose.
+2. Secuditor Branding
+The Secuditor name, logos, and other original branding elements are not included in the rights granted by this MIT License.
+The MIT License does not grant trademark rights or permission to use the Secuditor name or logos in a manner that falsely implies official status, endorsement, or affiliation.
+This section does not restrict the rights granted under the MIT License to use, modify, and redistribute the Software itself.
+Third-party branding and assets remain subject to their respective rights and licenses.
 
-3. Ownership
-- The Software is licensed, not sold. All rights, title, and interest in and to the Software remain with the Licensor. This includes all code and other materials created by the Licensor.
-- The Secuditor name, logo, and icon are the exclusive property of the Licensor and are protected by applicable copyright and trademark laws, whether or not formally registered.
-- This Agreement does not grant the User any rights to the source code, which constitutes confidential and proprietary information protected by applicable intellectual property laws.
-
-4. Disclaimer of Warranty
-- The Software is provided “AS IS”, without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement.
-- The Licensor does not guarantee that the Software will detect all issues, nor does it make any operational changes to the system, the Software designed as a diagnostic tool.
-
-5. Lawful Usage
-The Software is provided strictly for lawful and ethical purposes. Users are responsible for ensuring compliance with all applicable laws, regulations, and organizational policies. Users should ensure they have the necessary expertise or guidance to use the Software safely.
-
-6. Limitation of Liability
-In no event shall Licensor be liable for any damages (including, but not limited to, loss of data, loss of profits, or business interruption) arising from the use or inability to use the Software, even if Licensor has been advised of the possibility of such damages.
-
-7. Governing Law
-This Agreement shall be governed by and construed in accordance with the laws of the Country in which the Licensor resides.
-
-8. Third-Party Software
-This Software includes third-party open-source components and icons that are licensed separately. 
-Your use of those components is subject to their respective licenses. Links to these licenses are provided in the THIRD_PARTY_LICENSES.txt file included with the repository.
-
-Third-party components included:
-- Python (Python Software Foundation License)
-- pywin32 (MIT License)
-- WMI (Python WMI library)
-- Requests (Apache License 2.0)
-- psutil (BSD License)
-- cryptography (Apache License 2.0 / BSD)
-- Tcl/Tk via Tkinter (BSD-style License)
-- Freepik (UI Buttons) icons by @user915206 (Freepik Free License)
-- MACLookup vendor database (CSV format) used for vendor identification
+3. Third-Party Components
+This Software includes third-party open-source components, libraries, and icons that are licensed separately. Their use and redistribution are subject to the terms of their respective licenses.
+A list of these components and links to their respective licenses is provided in the THIRD_PARTY_LICENSES.txt file included with the repository.
