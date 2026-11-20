@@ -112,7 +112,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are detai
 ## Getting Started – Windows Release
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.4.0.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.4.0/SecuditorLite_2.4.0.zip) (21.2 MB)
+- #### [SecuditorLite_2.4.0.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.4.0/SecuditorLite_2.4.0.zip) (21.3 MB)
 - **SHA-256:** 65e1fdfb5e480ebb99f4a00c2498ef54f300bc97b6079a610040050500aca843
 
 ### 2️⃣ Extract & Run
