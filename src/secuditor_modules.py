@@ -1,7 +1,7 @@
 # Secuditor Modules – Copyright (c) 2026 Menahem Levinski
 
 import requests, json, getpass, win32security, win32net, win32netcon
-import sys, re, os, subprocess, tempfile, warnings
+import sys, re, os, subprocess, tempfile, warnings, textwrap
 import socket, platform, psutil, ipaddress
 import pythoncom, winreg, wmi, ctypes
 import time, hashlib
@@ -541,44 +541,72 @@ def get_domain_settings():
     except Exception:
         data["Domain Role"] = "Unknown"
 
-    # --- All local users ---
+    # --- All local users (via Win32 API; handles spaces, multi-line groups, localization & DCs) ---
     try:
-        output = _run_check_output(["net", "user"], shell=False)
-        lines = output.splitlines()
+        is_dc = False
         try:
-            sep_index = next(i for i, line in enumerate(lines) if line.strip().startswith('---'))
-        except StopIteration:
-            sep_index = 0
+            srv_info = win32net.NetServerGetInfo(None, 101)
+            srv_type = int(srv_info.get("type", 0))
+            is_dc = bool(
+                srv_type
+                & (win32netcon.SV_TYPE_DOMAIN_CTRL | win32netcon.SV_TYPE_DOMAIN_BAKCTRL)
+            )
+        except Exception:
+            is_dc = False
 
-        users = []
-        for line in lines[sep_index+1:]:
-            if line.strip() and not line.lower().startswith("the command completed successfully"):
-                users.extend(line.split())
-
-        # --- Check each user ---
-        for user in users:
-            status = "Unknown"
-            is_admin = False
+        if not is_dc:
+            admin_sids = set()
+            admin_names = set()
             try:
-                info_output = _run_check_output(["net", "user", user], shell=False)
-                match = re.search(r"Account active\s+(\w+)", info_output, re.IGNORECASE)
-                if match:
-                    status = "Enabled" if match.group(1).strip().lower() == "yes" else "Disabled"
-
-                # Check if user is in Administrators group
-                groups = re.findall(r"Local Group Memberships\s+(.*)", info_output)
-                if groups and "Administrators" in groups[0]:
-                    is_admin = True
-
+                admins_sid = win32security.ConvertStringSidToSid("S-1-5-32-544")
+                admins_group_name, _, _ = win32security.LookupAccountSid(None, admins_sid)
+                resume = 0
+                while True:
+                    members, total, resume = win32net.NetLocalGroupGetMembers(
+                        None, admins_group_name, 1, resume
+                    )
+                    for m in members:
+                        msid = m.get("sid")
+                        if msid is not None:
+                            try:
+                                admin_sids.add(win32security.ConvertSidToStringSid(msid))
+                            except Exception:
+                                pass
+                        mname = (m.get("name") or "").strip().lower()
+                        if mname:
+                            admin_names.add(mname)
+                    if not resume:
+                        break
             except Exception:
                 pass
 
-            user_entry = f"{user} ({status})"
-            if is_admin:
-                data["Privileged Users"].append(user_entry)
-            else:
-                data["Regular Users"].append(user_entry)
-                
+            resume = 0
+            while True:
+                users_page, total, resume = win32net.NetUserEnum(
+                    None, 1, win32netcon.FILTER_NORMAL_ACCOUNT, resume
+                )
+                for u in users_page:
+                    uname = u.get("name") or ""
+                    if not uname:
+                        continue
+                    flags = int(u.get("flags", 0))
+                    status = "Disabled" if (flags & win32netcon.UF_ACCOUNTDISABLE) else "Enabled"
+                    is_admin_user = uname.lower() in admin_names
+                    if not is_admin_user and admin_sids:
+                        try:
+                            u_sid, _, _ = win32security.LookupAccountName(None, uname)
+                            if win32security.ConvertSidToStringSid(u_sid) in admin_sids:
+                                is_admin_user = True
+                        except Exception:
+                            pass
+
+                    user_entry = f"{uname} ({status})"
+                    if is_admin_user:
+                        data["Privileged Users"].append(user_entry)
+                    else:
+                        data["Regular Users"].append(user_entry)
+                if not resume:
+                    break
     except Exception:
         pass
 
@@ -678,30 +706,35 @@ def ntlm_verdict(
     """
     Produce a text verdict instead of a numeric score.
     """
-    ntlm_restricted = (restrict_receiving == 2) or (restrict_sending == 2)
+    # Always flag LM hash storage when explicitly enabled
+    if lmhash == 0:
+        if lm in (0, 1, 2) and block_ntlmv1_sso != 1:
+            return "Critical, Weak NTLM policy (LM/NTLMv1 and LM hashes enabled)"
+        return "Warning, LM hash storage is allowed (NoLMHash=0)"
 
-    # Explicit NTLM traffic blocking supersedes legacy LmCompatibilityLevel
+    # Only supersede LmCompatibilityLevel when BOTH inbound and outbound NTLM are denied
+    ntlm_restricted = (restrict_receiving == 2) and (restrict_sending == 2)
     if ntlm_restricted:
         if audit == 2:
             return "Strong, NTLM restricted/blocked and NTLM audit enabled"
         return "Strong, NTLM restricted/blocked without NTLM auditing"
 
-    # Worst case verdict (unless NTLMv1 SSO block prevents NTLMv1)
-    if lm in [0, 1]:
+    # Weak: LM or NTLMv1 sent (0=LM&NTLM, 1=LM&NTLM/NTLMv2, 2=NTLMv1 only)
+    if lm in (0, 1, 2):
         if block_ntlmv1_sso == 1:
             return "Moderate, Legacy LmCompatibilityLevel set but NTLMv1 SSO blocked"
         return "Critical, Weak NTLM policy (LM/NTLMv1 enabled)"
 
-    # Good: Using strong NTLMv2 defaults but not hardened
-    if lm in [None, 2, 3]:
-        if lmhash == 0:
-            return "Warning, NTLMv2 is enabled but LM hashes allowed"
+    # Moderate: NTLMv2 sent, but NTLMv1 still accepted inbound (None/3/4)
+    if lm in (None, 3, 4):
         if block_ntlmv1_sso == 1:
             return "Moderate, NTLMv2 is used (NTLMv1 SSO blocked)"
+        if lm == 4:
+            return "Moderate, NTLMv2 sent but NTLMv1 still accepted"
         return "Moderate, NTLMv2 is used but not enforced"
 
-    # Strongest settings
-    if lm in [4, 5]:
+    # Strongest: Send NTLMv2 response only; refuse LM & NTLM (5)
+    if lm == 5:
         suffix = " (NTLMv1 SSO blocked)" if block_ntlmv1_sso == 1 else ""
         if audit == 2:
             return f"Strong, NTLMv2 enforced and NTLM audit enabled{suffix}"
@@ -1177,6 +1210,12 @@ class SharedFolders:
                     object_types.add(win32security.ACCESS_DENIED_OBJECT_ACE_TYPE)
                 inherit_only_flag = getattr(win32security, "INHERIT_ONLY_ACE", 0x8)
 
+                denied_sids = set()
+                GENERIC_ALL = 0x10000000
+                GENERIC_EXECUTE = 0x20000000
+                GENERIC_WRITE = 0x40000000
+                GENERIC_READ = 0x80000000
+
                 for i in range(dacl.GetAceCount()):
                     try:
                         ace = dacl.GetAce(i)
@@ -1194,40 +1233,120 @@ class SharedFolders:
                         continue
 
                     if ace_type in deny_types:
-                        if not account.startswith("NT AUTHORITY\\"):
+                        denied_sids.add(sid_str)
+                        if sid_str != "S-1-5-18":
                             perms.append(f"{account}: Denied")
                         continue
 
-                    # Check for Everyone (S-1-1-0) on allow ACEs only
-                    if sid_str == "S-1-1-0":
+                    # Skip only LocalSystem (S-1-5-18); preserve ANONYMOUS LOGON & Authenticated Users
+                    if sid_str == "S-1-5-18":
+                        continue
+
+                    # Check for Everyone (S-1-1-0) / Anonymous Logon (S-1-5-7) unless explicitly denied earlier
+                    if sid_str in ("S-1-1-0", "S-1-5-7") and sid_str not in denied_sids:
                         everyone_detected = True
 
-                    if account.startswith("NT AUTHORITY\\"):
-                        continue  # skip these accounts
-
                     rights = []
-                    if (access_mask & con.FILE_ALL_ACCESS) == con.FILE_ALL_ACCESS:
+                    if (
+                        (access_mask & con.FILE_ALL_ACCESS) == con.FILE_ALL_ACCESS
+                        or bool(access_mask & GENERIC_ALL)
+                    ):
                         rights = ["Full Control"]
                     else:
-                        if (access_mask & con.FILE_GENERIC_READ) == con.FILE_GENERIC_READ:
+                        if (
+                            (access_mask & con.FILE_GENERIC_READ) == con.FILE_GENERIC_READ
+                            or bool(access_mask & GENERIC_READ)
+                        ):
                             rights.append("Read")
-                        if (access_mask & con.FILE_GENERIC_WRITE) == con.FILE_GENERIC_WRITE:
+                        if (
+                            (access_mask & con.FILE_GENERIC_WRITE) == con.FILE_GENERIC_WRITE
+                            or bool(access_mask & GENERIC_WRITE)
+                        ):
                             rights.append("Write")
-                        if (access_mask & con.FILE_GENERIC_EXECUTE) == con.FILE_GENERIC_EXECUTE:
+                        if (
+                            (access_mask & con.FILE_GENERIC_EXECUTE) == con.FILE_GENERIC_EXECUTE
+                            or bool(access_mask & GENERIC_EXECUTE)
+                        ):
                             rights.append("Execute")
 
                     perms.append(f"{account}: {', '.join(rights) if rights else 'Special Permissions'}")
             else:
-                perms.append("(No DACL)")
+                # NULL DACL grants unrestricted Full Control to Everyone on Windows
+                everyone_detected = True
+                perms.append("NULL DACL (Unrestricted Everyone Full Control)")
+        except win32security.error as we:
+            if getattr(we, "winerror", None) == 5:
+                perms.append("(Access denied)")
+            else:
+                perms.append(f"(Unable to read ACL: {we})")
+        except PermissionError:
+            perms.append("(Access denied)")
         except Exception as e:
             perms.append(f"(Unable to read ACL: {e})")
         return perms, everyone_detected
+
+    @staticmethod
+    def _format_share_illustration(share, hostname):
+        """Build a compact 2-line Option 1 SMB flow diagram for a single share."""
+        def _short(text, max_len):
+            s = str(text or "N/A").strip() or "N/A"
+            return s if len(s) <= max_len else s[: max(1, max_len - 3)].rstrip() + "..."
+
+        name = str(share.get("Name") or "Unknown")
+        path = str(share.get("Path") or "N/A")
+        unc = _short(f"\\\\{hostname}\\{name}", 28)
+        path_short = _short(path, 38)
+        is_admin_share = name.endswith("$")
+        perms = share.get("Permissions") or []
+        acl_unreadable = not perms or all(str(p).strip().startswith("(") for p in perms)
+        pad = " " * 20
+
+        lines = ["Illustration:"]
+        if is_admin_share:
+            lines.append(f"  [ Network / SMB ] ===( Admin Share )===> [ {unc} ]")
+            lines.append(f"{pad}└─ Local Path: {path_short} | Admin-only default share")
+        elif share.get("Everyone"):
+            lines.append(f"  [ Network / SMB ] --! ( Exposed: Everyone ) !--> [ {unc} ]")
+            lines.append(f"{pad}└─ Alert: {path_short} accessible by Everyone / Anonymous")
+        elif acl_unreadable:
+            lines.append(f"  [ Network / SMB ] --? ( ACL Unverified ) ?--> [ {unc} ]")
+            lines.append(f"{pad}└─ Local Path: {path_short} | Access denied")
+        else:
+            lines.append(f"  [ Network / SMB ] ---( Restricted Share )---> [ {unc} ]")
+            lines.append(f"{pad}└─ Local Path: {path_short} | Restricted ACL")
+        return "\n".join(lines)
 
     # --- Get shared folders with Everyone check ---
     def get_shared_folders(self):
         output = [""]
         shares_data = []
         com_initialized = False
+
+        def _collect_shares():
+            import win32com.client
+            collected = []
+            svc = win32com.client.GetObject(r"winmgmts:\\.\root\cimv2")
+            for s in svc.ExecQuery("SELECT Name, Path, Description FROM Win32_Share"):
+                name = str(getattr(s, "Name", "") or "")
+                if name.upper() in ("ADMIN$", "IPC$"):
+                    continue
+
+                path = str(getattr(s, "Path", "") or "")
+                desc = str(getattr(s, "Description", "") or "")
+                if path:
+                    permissions, everyone_flag = self.get_permissions(path)
+                else:
+                    permissions = ["(No local path)"]
+                    everyone_flag = False
+
+                collected.append({
+                    "Name": name,
+                    "Path": path,
+                    "Description": desc or "None",
+                    "Permissions": permissions,
+                    "Everyone": everyone_flag
+                })
+            return collected
 
         try:
             try:
@@ -1238,36 +1357,24 @@ class SharedFolders:
                 if ce.hresult != -2147417850:
                     raise
 
-            c = wmi.WMI()
-            admin = is_admin()
-            for s in c.Win32_Share():
-                if s.Name.upper() in ("ADMIN$", "IPC$"):
-                    continue
-
-                if admin and s.Path:
-                    permissions, everyone_flag = self.get_permissions(s.Path)
-                else:
-                    permissions = ["(Access denied)"]
-                    everyone_flag = False
-
-                shares_data.append({
-                    "Name": s.Name,
-                    "Path": s.Path or "",
-                    "Description": s.Description or "None",
-                    "Permissions": permissions,
-                    "Everyone": everyone_flag
-                })
+            shares_data = _collect_shares()
 
         except Exception as e:
             output.append(f"Error: {e}")
             return "\n".join(output)
         finally:
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
             if com_initialized:
                 try:
                     pythoncom.CoUninitialize()
                 except Exception:
                     pass
 
+        hostname = socket.gethostname() or "This Host"
         if not shares_data:
             output.append("No shared folders found.")
         else:
@@ -1278,9 +1385,12 @@ class SharedFolders:
                 output.append("Permissions:")
                 for perm in share["Permissions"]:
                     output.append(f"  {perm}")
-                if share["Everyone"]:
+                if share["Everyone"] and not str(share["Name"]).endswith("$"):
                     output.append("⚠️ Warning: Folder accessible by Everyone!")
-                
+
+                output.append("")
+                output.append(self._format_share_illustration(share, hostname))
+
                 # Only add the separator if not the last share
                 if i != len(shares_data) - 1:
                     output.append("–" * 50)
@@ -1946,20 +2056,29 @@ class GatewayDiscovery:
 
     def check_http_access(self, ip):
         """Check HTTP/HTTPS for IPv4 or IPv6."""
-        for scheme in ["http", "https"]:
-            try:
-                if ":" in ip:  # IPv6
-                    url = f"{scheme}://[{ip}]"
-                else:
-                    url = f"{scheme}://{ip}"
+        with requests.Session() as session:
+            session.trust_env = False
+            for scheme in ["http", "https"]:
+                try:
+                    if ":" in ip:  # IPv6
+                        url = f"{scheme}://[{ip}]"
+                    else:
+                        url = f"{scheme}://{ip}"
 
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", InsecureRequestWarning)
-                    r = requests.get(url, timeout=3, verify=False)
-                if r.status_code < 500:
-                    return f"{scheme.upper()} Responding ({r.status_code})"
-            except Exception:
-                continue
+                    with session.get(
+                        url,
+                        timeout=3,
+                        verify=True,
+                        allow_redirects=False,
+                        stream=True,
+                    ) as r:
+                        if r.status_code < 500:
+                            return f"{scheme.upper()} Responding ({r.status_code})"
+                except requests.exceptions.SSLError:
+                    if scheme == "https":
+                        return "HTTPS Responding (Self-Signed/Untrusted Cert)"
+                except Exception:
+                    continue
         return "No web interface detected"
 
     def detect_nat(self):
@@ -2017,8 +2136,82 @@ class GatewayDiscovery:
         except Exception:
             return "Unavailable"
 
+    @staticmethod
+    def _format_illustration(result):
+        """Build a compact Option 1 end-to-end gateway flow diagram."""
+        def _short(text, max_len):
+            s = str(text or "Unknown").strip() or "Unknown"
+            return s if len(s) <= max_len else s[: max(1, max_len - 3)].rstrip() + "..."
+
+        gw_ip = str(result.get("IP") or "").strip()
+        lines = ["Illustration:"]
+
+        if not gw_ip or gw_ip in ("Not Found", "Unavailable", "Unknown"):
+            lines.append("  [ This Host ] --- X ( No Default Gateway ) ---> [ Internet ]")
+            lines.append("                └─ Local network gateway not detected")
+            return "\n".join(lines)
+
+        gw_label = _short(gw_ip, 22)
+        pub_raw = str(result.get("Public IP") or "").strip()
+        pub_label = (
+            _short(pub_raw, 22)
+            if pub_raw and pub_raw not in ("Unavailable", "Unknown")
+            else "Internet"
+        )
+        vendor = _short(result.get("Vendor") or "Unknown", 32)
+        cidr = _short(result.get("Network CIDR") or "Unknown", 22)
+
+        nat_raw = str(result.get("NAT") or "Unknown").strip()
+        nat_arrow = (
+            "NAT" if nat_raw == "Detected"
+            else ("Direct" if nat_raw == "Not Detected" else "Edge")
+        )
+
+        vpn_raw = str(result.get("VPN") or "Not Detected").strip()
+        vpn_active = bool(vpn_raw) and vpn_raw not in ("Not Detected", "Unknown", "None")
+        vpn_short = "Active" if vpn_active else "Off"
+
+        mgmt_raw = str(result.get("Management Ports") or "Unknown").strip()
+        mgmt_exposed = "exposed" in mgmt_raw.lower()
+        mgmt_short = (
+            "Closed"
+            if "no common management ports" in mgmt_raw.lower()
+            else _short(mgmt_raw, 48)
+        )
+
+        gui_raw = str(result.get("GUI") or "Unknown").strip()
+        gui_short = (
+            "Closed"
+            if "no web interface" in gui_raw.lower()
+            else _short(gui_raw, 34)
+        )
+
+        if mgmt_exposed:
+            prefix = "  [ This Host ] --! ( Exposed Mgmt ) !--> "
+            pad = " " * len(prefix)
+            lines.append(f"{prefix}[ {gw_label} ] ---( {nat_arrow} )---> [ {pub_label} ]")
+            lines.append(f"{pad}├─ Vendor: {vendor} | CIDR: {cidr}")
+            lines.append(f"{pad}├─ Alert: {mgmt_short}")
+            lines.append(f"{pad}└─ GUI: {gui_short} | VPN: {vpn_short}")
+        elif vpn_active:
+            prefix = "  [ This Host ] ===( VPN Tunnel )===> "
+            pad = " " * len(prefix)
+            lines.append(f"{prefix}[ {gw_label} ] ===( {nat_arrow} )===> [ {pub_label} ]")
+            lines.append(f"{pad}├─ Vendor: {vendor} | CIDR: {cidr}")
+            lines.append(f"{pad}├─ Mgmt Ports: {mgmt_short}")
+            lines.append(f"{pad}└─ GUI: {gui_short}")
+        else:
+            prefix = "  [ This Host ] ===( LAN )===> "
+            pad = " " * len(prefix)
+            lines.append(f"{prefix}[ {gw_label} ] ===( {nat_arrow} )===> [ {pub_label} ]")
+            lines.append(f"{pad}├─ Vendor: {vendor} | CIDR: {cidr}")
+            lines.append(f"{pad}├─ Mgmt Ports: {mgmt_short}")
+            lines.append(f"{pad}└─ GUI: {gui_short} | VPN: {vpn_short}")
+
+        return "\n".join(lines)
+
     def detect_gateway_device(self):
-        """Main detection routine — returns a dict with gateway info."""
+        """Main detection routine — returns a formatted multi-line string with gateway info."""
         result = {
             "Vendor": "Unknown",
             "MAC": "Unknown",
@@ -2037,30 +2230,29 @@ class GatewayDiscovery:
         gateways = self.get_default_gateway()
         if not gateways:
             result["IP"] = "Not Found"
-            return result
+        else:
+            gw_ip = gateways.get("IPv4") or gateways.get("IPv6")
 
-        gw_ip = gateways.get("IPv4") or gateways.get("IPv6")
+            # Gather gateway info
+            result["IP"] = gw_ip
+            result["Public IP"] = self.get_external_ip()
+            result["PING"] = self.ping_device(gw_ip)
 
-        # Gather gateway info
-        result["IP"] = gw_ip
-        result["Public IP"] = self.get_external_ip()
-        result["PING"] = self.ping_device(gw_ip)
-
-        mac = self.get_mac_from_arp(gw_ip)
-        result["MAC"] = mac if mac else "Unknown"
-        result["Vendor"] = self.lookup_vendor(mac)
-        result["NAT"] = self.detect_nat()
-        result["Management Ports"] = self.detect_management_ports(gw_ip)
-        result["Network CIDR"] = self.get_network_cidr()
-        result["MTU"] = self.get_interface_mtu()
-        result["GUI"] = self.check_http_access(gw_ip)
-        result["Proxy Configuration"] = self.get_proxy_configuration()
-        
-        # --- VPN Client check ---
-        result["VPN"] = NetStatus().get_vpn_connection(
-            keywords=("vpn", "ppp", "tap", "tun"),
-            not_found_label="Not Detected",
-        )
+            mac = self.get_mac_from_arp(gw_ip)
+            result["MAC"] = mac if mac else "Unknown"
+            result["Vendor"] = self.lookup_vendor(mac)
+            result["NAT"] = self.detect_nat()
+            result["Management Ports"] = self.detect_management_ports(gw_ip)
+            result["Network CIDR"] = self.get_network_cidr()
+            result["MTU"] = self.get_interface_mtu()
+            result["GUI"] = self.check_http_access(gw_ip)
+            result["Proxy Configuration"] = self.get_proxy_configuration()
+            
+            # --- VPN Client check ---
+            result["VPN"] = NetStatus().get_vpn_connection(
+                keywords=("vpn", "ppp", "tap", "tun"),
+                not_found_label="Not Detected",
+            )
 
         output = [""]  # optional blank line at top
         keys = list(result.keys())
@@ -2082,7 +2274,8 @@ class GatewayDiscovery:
 
             # Optional separator between sections
             output.append("–" * 50)
-        
+
+        output.append(self._format_illustration(result))
         return "\n".join(output)
 
 # ===== System Settings =====
@@ -2124,8 +2317,142 @@ class SystemSettings:
         except (AttributeError, OSError):
             return "Unknown"
 
+    _SMBIOS_MEMORY_TYPES = {
+        20: "DDR",
+        21: "DDR2",
+        22: "DDR2 FB-DIMM",
+        24: "DDR3",
+        26: "DDR4",
+        27: "LPDDR",
+        28: "LPDDR2",
+        29: "LPDDR3",
+        30: "LPDDR4",
+        34: "DDR5",
+        35: "LPDDR5",
+        36: "LPDDR5X",
+    }
+
+    _VIRTUAL_GPU_MARKERS = (
+        "microsoft basic display",
+        "microsoft remote display",
+        "citrix indirect",
+        "parsec virtual",
+        "idd sample",
+        "luminoncore",
+    )
+
     def _get_bios_info(self):
         return _get_cim_value("Win32_BIOS", "SMBIOSBIOSVersion")
+
+    @classmethod
+    def _parse_hardware_cim_payload(cls, payload):
+        """Parse BIOS, physical memory (speed/type), and GPU (manufacturer/model) from CIM payload."""
+        if not isinstance(payload, dict):
+            payload = {}
+
+        bios_raw = payload.get("bios")
+        bios_version = str(bios_raw).strip() if bios_raw else "Unknown"
+
+        def _as_dict_list(val):
+            if isinstance(val, dict):
+                return [val]
+            if isinstance(val, list):
+                return [x for x in val if isinstance(x, dict)]
+            return []
+
+        # --- Memory Speed & Type ---
+        speeds = []
+        mem_types = []
+        for dimm in _as_dict_list(payload.get("memory")):
+            speed_val = None
+            for skey in ("ConfiguredClockSpeed", "Speed"):
+                raw_s = dimm.get(skey)
+                try:
+                    iv = int(raw_s)
+                    if iv > 0:
+                        speed_val = iv
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if speed_val is not None:
+                s_label = f"{speed_val} MHz"
+                if s_label not in speeds:
+                    speeds.append(s_label)
+
+            m_label = None
+            for tkey in ("SMBIOSMemoryType", "MemoryType"):
+                raw_t = dimm.get(tkey)
+                try:
+                    tv = int(raw_t)
+                    if tv in cls._SMBIOS_MEMORY_TYPES:
+                        m_label = cls._SMBIOS_MEMORY_TYPES[tv]
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if m_label and m_label not in mem_types:
+                mem_types.append(m_label)
+
+        # --- GPU Manufacturer & Model ---
+        raw_gpus = _as_dict_list(payload.get("gpus"))
+        physical_gpus = []
+        for g in raw_gpus:
+            g_name = str(g.get("Name") or g.get("VideoProcessor") or "").strip().lower()
+            if g_name and not any(m in g_name for m in cls._VIRTUAL_GPU_MARKERS):
+                physical_gpus.append(g)
+        selected_gpus = physical_gpus if physical_gpus else raw_gpus
+
+        gpu_makers = []
+        gpu_models = []
+        for g in selected_gpus:
+            maker = str(g.get("AdapterCompatibility") or "").strip()
+            model = str(g.get("Name") or g.get("VideoProcessor") or "").strip()
+            if maker and maker not in gpu_makers:
+                gpu_makers.append(maker)
+            if model and model not in gpu_models:
+                gpu_models.append(model)
+
+        return {
+            "bios": bios_version or "Unknown",
+            "memory_speed": ", ".join(speeds) if speeds else "Unknown",
+            "memory_type": ", ".join(mem_types) if mem_types else "Unknown",
+            "gpu_manufacturer": ", ".join(gpu_makers) if gpu_makers else "Unknown",
+            "gpu_model": ", ".join(gpu_models) if gpu_models else "Unknown",
+        }
+
+    def _get_hardware_cim_info(self):
+        """Query BIOS, PhysicalMemory, and VideoController in a single non-admin CIM call."""
+        ps_cmd = (
+            "@{ "
+            "bios = (Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue "
+            "| Select-Object -First 1 -ExpandProperty SMBIOSBIOSVersion); "
+            "memory = @(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction SilentlyContinue "
+            "| Select-Object ConfiguredClockSpeed,Speed,SMBIOSMemoryType,MemoryType); "
+            "gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue "
+            "| Select-Object AdapterCompatibility,Name,VideoProcessor) "
+            "} | ConvertTo-Json -Compress -Depth 3"
+        )
+        try:
+            result = subprocess.run(
+                [
+                    _system_exe("powershell.exe"),
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    ps_cmd,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=6,
+                env=_safe_subproc_env(),
+                creationflags=_CREATE_NO_WINDOW,
+                startupinfo=_STARTUPINFO,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return self._parse_hardware_cim_payload(json.loads(result.stdout))
+        except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+            pass
+
+        return self._parse_hardware_cim_payload({"bios": self._get_bios_info()})
 
     # --- Collect basic OS and Resources info using platform module ---
     def get_system_settings(self):
@@ -2138,9 +2465,10 @@ class SystemSettings:
             if os_name == "Windows" and windows_edition != "Unknown"
             else f"{os_name}{os_release}"
         )
-                
+
         firmware_type = self._get_firmware_type()
-        bios_version = self._get_bios_info()
+        hw_info = self._get_hardware_cim_info()
+        bios_version = hw_info["bios"]
 
         firmware_version = (
             f"{firmware_type} {bios_version.split(' - ')[-1]}"
@@ -2167,6 +2495,10 @@ class SystemSettings:
                 round(cpu_freq.current) if cpu_freq else "Unknown"
             ),
             "RAM (GB)": round(memory.total / (1024**3), 2),
+            "Memory Speed": hw_info["memory_speed"],
+            "Memory Type": hw_info["memory_type"],
+            "GPU Manufacturer": hw_info["gpu_manufacturer"],
+            "GPU Model": hw_info["gpu_model"],
         }
 
         # --- Gather disks info safely ---
@@ -2524,6 +2856,11 @@ class SecuritySettings:
     def get_windows_firewall_state():
         """Return Windows Firewall aggregate profile status ('On', 'Partially', 'Off', or 'Unknown')."""
         try:
+            # Verify the Windows Defender Firewall service (mpssvc) is actually running
+            svc_out = _run(["sc", "query", "mpssvc"]).upper()
+            if "STOPPED" in svc_out or "STOP_PENDING" in svc_out:
+                return "Off"
+
             profiles = {"Domain": True, "Private": True, "Public": True}
             gpo_reg_path = r"SOFTWARE\Policies\Microsoft\WindowsFirewall"
             reg_path = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy"
@@ -2758,15 +3095,24 @@ class SecuritySettings:
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "Get-MpComputerStatus | Select-Object -ExpandProperty AMServiceEnabled",
+                    "Get-MpComputerStatus | Select-Object AMServiceEnabled,AntivirusEnabled,RealTimeProtectionEnabled | ConvertTo-Json -Compress",
                 ],
-                shell=False, text=True, errors="ignore",
+                shell=False, text=True, encoding="utf-8", errors="replace",
+                timeout=10,
                 env=_safe_subproc_env(),
                 creationflags=_CREATE_NO_WINDOW,
                 startupinfo=_STARTUPINFO,
             ).strip()
-            defender_active = output.lower() == "true"
-            result["Windows Defender"].append(f"Windows Defender ({'Active' if defender_active else 'Inactive'})")
+            mp_data = json.loads(output) if output else {}
+            if isinstance(mp_data, dict) and mp_data:
+                defender_active = (
+                    mp_data.get("AMServiceEnabled") is True
+                    and mp_data.get("AntivirusEnabled") is True
+                    and mp_data.get("RealTimeProtectionEnabled") is True
+                )
+                result["Windows Defender"].append(f"Windows Defender ({'Active' if defender_active else 'Inactive'})")
+            else:
+                result["Windows Defender"].append("Windows Defender (Unknown)")
         except Exception:
             result["Windows Defender"].append("Windows Defender (Unknown)")
 
@@ -2817,14 +3163,39 @@ class SecuritySettings:
         except Exception:
             pass
 
-        # --- Host-based Firewall (safe, no WMI / SecurityCenter2) ---
+        # --- Host-based Firewall (SecurityCenter2 3rd-party aware + Windows Firewall fallback) ---
         try:
-            # Detect controller
-            fw_info = self.firewall_managed_by_safe()
-            controller = fw_info["product_name"] if fw_info["managed"] else "Windows Firewall"
+            active_3p_fw = None
+            try:
+                ps_fw = (
+                    'Get-CimInstance -Namespace "root/SecurityCenter2" '
+                    '-ClassName FirewallProduct -ErrorAction SilentlyContinue | '
+                    'Select-Object displayName,productState | ConvertTo-Json -Compress'
+                )
+                fw_out = subprocess.check_output(
+                    [_system_exe("powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", ps_fw],
+                    shell=False, text=True, encoding="utf-8", errors="replace",
+                    timeout=10,
+                    env=_safe_subproc_env(),
+                    creationflags=_CREATE_NO_WINDOW,
+                    startupinfo=_STARTUPINFO,
+                ).strip()
+                if fw_out:
+                    fw_products = self._parse_sc2_products(json.loads(fw_out))
+                    for fw_name, fw_act in fw_products:
+                        if fw_act is True and fw_name.lower() != "windows firewall":
+                            active_3p_fw = fw_name
+                            break
+            except Exception:
+                active_3p_fw = None
 
-            status = self.get_windows_firewall_state()
-            result["Host-based Firewall"] = f"{controller} ({status})" if status != "Unknown" else "Unknown"
+            if active_3p_fw:
+                result["Host-based Firewall"] = f"{active_3p_fw} (On)"
+            else:
+                fw_info = self.firewall_managed_by_safe()
+                controller = fw_info["product_name"] if fw_info["managed"] else "Windows Firewall"
+                status = self.get_windows_firewall_state()
+                result["Host-based Firewall"] = f"{controller} ({status})" if status != "Unknown" else "Unknown"
 
         except Exception:
             result["Host-based Firewall"] = "Unknown"
@@ -3382,77 +3753,105 @@ class SecuritySettings:
         return _security_settings_cache
 
     def format_security_settings(self, settings):
-        """Formats security settings as a clean table."""
+        """Formats security settings as a wide, spaced 98-char table with row separators."""
+        if not isinstance(settings, dict) or not settings:
+            return "\n    None Detected"
 
-        lines = [""]
+        w_set, w_stat, w_det = 30, 24, 36
+        gap = "    "
+        total_w = w_set + len(gap) + w_stat + len(gap) + w_det  # 98 chars
+        sep = " " + ("–" * total_w)
 
-        headers = ("Setting", "Status", "Remarks")
+        def _clip(text, width):
+            s = str(text or "Unknown").strip() or "Unknown"
+            return s if len(s) <= width else s[: max(1, width - 3)].rstrip() + "..."
+
+        state_tokens = {
+            "active", "inactive", "on", "off", "partially",
+            "enabled", "disabled", "unknown", "snoozed", "expired",
+        }
+
         rows = []
-
         for key, value in settings.items():
             items = value if isinstance(value, list) else [value]
 
             if not items:
-                rows.append((key, "Unknown", "-"))
+                rows.append((key, "Unknown", "–"))
                 continue
 
             for i, item in enumerate(items):
-                item = str(item or "Unknown")
+                item_str = str(item or "Unknown").strip()
+                label = key if i == 0 else ""
 
-                # Handle Anonymous Access findings
+                # Handle multi-line Anonymous Access findings
                 if key == "Anonymous Access":
-                    for j, entry in enumerate(item.splitlines()):
-                        entry = entry.strip()
-
+                    sub_lines = [ln.strip() for ln in item_str.splitlines() if ln.strip()]
+                    if not sub_lines:
+                        rows.append((label, "Unknown", "–"))
+                        continue
+                    for j, entry in enumerate(sub_lines):
+                        row_label = key if (i == 0 and j == 0) else ""
                         if ":" in entry:
-                            status, remarks = entry.split(":", 1)
-                            status = status.strip()
-                            remarks = remarks.strip() or "-"
+                            left, right = entry.split(":", 1)
+                            left, right = left.strip(), right.strip()
+                            if right:
+                                status, details = right, left or "–"
+                            else:
+                                status, details = left or "Unknown", "–"
                         else:
-                            status = entry or "Unknown"
-                            remarks = "-"
-
-                        rows.append((
-                            key if i == 0 and j == 0 else "",
-                            status,
-                            remarks
-                        ))
+                            status, details = entry or "Unknown", "–"
+                        rows.append((row_label, status, details))
                     continue
 
-                remarks = "-"
-
-                if "(" in item and ")" in item:
-                    status, remainder = item.split("(", 1)
-                    remarks = remainder.rsplit(")", 1)[0].strip()
-                    status = status.strip()
+                details = "–"
+                if "(" in item_str and ")" in item_str:
+                    before, remainder = item_str.split("(", 1)
+                    inside = remainder.rsplit(")", 1)[0].strip()
+                    before = before.strip()
+                    # Normalize "<Product> (Active/On/Inactive)" -> Status=State, Details=Product
+                    if (
+                        key in ("Windows Defender", "Endpoint Protection", "Host-based Firewall")
+                        and inside.lower() in state_tokens
+                    ):
+                        status = inside
+                        details = before or "–"
+                    else:
+                        status = before or "Unknown"
+                        details = inside or "–"
                 else:
-                    status = item.strip()
+                    status = item_str or "Unknown"
 
-                rows.append((
-                    key if i == 0 else "",
-                    status or "Unknown",
-                    remarks or "-"
-                ))
+                if key == "Windows Defender":
+                    st_l = (status or "").lower()
+                    if st_l == "active":
+                        details = "Default Provider"
+                    elif st_l == "inactive":
+                        details = "Alternative Provider"
+                    else:
+                        details = "–"
 
-        if rows:
-            lines.append(
-                f"{headers[0]:<30}"
-                f"{headers[1]:<25}"
-                f"{headers[2]}"
-            )
-            lines.append("–" * 80)
+                rows.append((label, status or "Unknown", details or "–"))
 
-            for i, (key, status, remarks) in enumerate(rows):
-                lines.append(
-                    f"{key:<30}"
-                    f"{status:<25}"
-                    f"{remarks}"
-                )
+        if not rows:
+            return "\n    None Detected"
 
-                if i < len(rows) - 1 and rows[i + 1][0]:
-                    lines.append("–" * 80)
-        else:
-            lines.append("    None Detected")
+        lines = [
+            "",
+            f" {'Setting':<{w_set}}{gap}{'Status':<{w_stat}}{gap}{'Details':<{w_det}}".rstrip(),
+            sep,
+        ]
+
+        cont_prefix = " " + (" " * w_set) + gap + (" " * w_stat) + gap
+        for idx, (key, status, details) in enumerate(rows):
+            k_col = _clip(key, w_set) if key else ""
+            s_col = _clip(status, w_stat)
+            d_text = str(details or "–").strip() or "–"
+            wrapped = textwrap.wrap(d_text, width=w_det, break_long_words=True, break_on_hyphens=False) or ["–"]
+            lines.append(f" {k_col:<{w_set}}{gap}{s_col:<{w_stat}}{gap}{wrapped[0]}".rstrip())
+            for cont in wrapped[1:]:
+                lines.append(f"{cont_prefix}{cont}".rstrip())
+            if idx < len(rows) - 1 and rows[idx + 1][0]:
+                lines.append(sep)
 
         return "\n".join(lines)
 
@@ -3468,9 +3867,21 @@ class RemoteAccessSettings:
     def check_winrm_service(self):
         output = _run(["sc", "qc", "WinRM"])
 
-        if "SERVICE_NAME" not in output:
+        if not output.strip():
+            return {
+                "status": "Unknown",
+                "running": False
+            }
+
+        if "1060" in output:
             return {
                 "status": "Disabled",
+                "running": False
+            }
+
+        if "SERVICE_NAME" not in output:
+            return {
+                "status": "Unknown",
                 "running": False
             }
 
@@ -3517,21 +3928,34 @@ class RemoteAccessSettings:
                 creationflags=_CREATE_NO_WINDOW,
                 startupinfo=_STARTUPINFO,
             )
+            return {
+                "http": bool(re.search(r"\bTransport\s*=\s*HTTP\b", output, re.IGNORECASE)),
+                "https": bool(re.search(r"\bTransport\s*=\s*HTTPS\b", output, re.IGNORECASE)),
+                "unknown": False,
+            }
         except (subprocess.SubprocessError, OSError):
-            output = ""
-        return {
-            "http": bool(re.search(r"\bTransport\s*=\s*HTTP\b", output, re.IGNORECASE)),
-            "https": bool(re.search(r"\bTransport\s*=\s*HTTPS\b", output, re.IGNORECASE)),
-        }
+            # Non-admin or WSMan query failure: do not misreport as "No listeners"
+            return {
+                "http": False,
+                "https": False,
+                "unknown": True,
+            }
 
     def check_ports(self):
-        ports = []
+        ports = set()
+        try:
+            for c in psutil.net_connections(kind="tcp"):
+                if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port in (5985, 5986):
+                    ports.add(c.laddr.port)
+            return sorted(ports)
+        except Exception:
+            pass
         for port in (5985, 5986):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.5)
                 if s.connect_ex(("127.0.0.1", port)) == 0:
-                    ports.append(port)
-        return ports
+                    ports.add(port)
+        return sorted(ports)
 
     def check_auth(self):
         auth = {}
@@ -3660,8 +4084,20 @@ class RemoteAccessSettings:
     def winrm_verdict(self, service, listeners, ports, risk):
         status = service.get("status", "Unknown").lower()
 
+        if status == "unknown":
+            return "Unknown"
+
         if status != "enabled":
             return "Disabled"
+
+        if listeners.get("unknown"):
+            if not service.get("running") and not ports:
+                return "Enabled, Low Risk (No ports listeners)"
+            if 5985 in ports:
+                return "Enabled, High Risk (HTTP listener on 5985)"
+            if 5986 in ports:
+                return "Enabled, Moderate Risk (HTTPS listener on 5986)"
+            return "Unknown"
 
         if not listeners.get("http") and not listeners.get("https"):
             return "Enabled, Low Risk (No listeners)"
@@ -3680,14 +4116,326 @@ class RemoteAccessSettings:
 
         return "Enabled, Unknown Risk (Exposure unknown)"
 
+    @staticmethod
+    def _is_bluetooth_radio_controller(instance_id):
+        """Return True if a PnP InstanceId represents a physical Bluetooth radio controller (not a paired peripheral)."""
+        iid = str(instance_id or "").strip().upper()
+        if not iid:
+            return False
+        if iid.startswith(("BTHENUM\\", "BTHLE\\", "BTHLEDEVICE\\", "BTH\\")):
+            return False
+        return iid.startswith(("USB\\", "PCI\\", "ACPI\\", "SD\\", "UART\\", "BTHUSB\\", "HID\\", "ROOT\\"))
+
+    @staticmethod
+    def _query_bluetooth_win32_state():
+        """Read-only Win32 Bluetooth API probe (bthprops.cpl): radio state, discoverability, and paired/connected devices."""
+        state = {
+            "active_radios": 0,
+            "connectable": False,
+            "discoverable": False,
+            "connected_count": 0,
+            "paired_count": 0,
+            "unauthenticated_connected": 0,
+        }
+        try:
+            class _BLUETOOTH_FIND_RADIO_PARAMS(ctypes.Structure):
+                _fields_ = [("dwSize", wintypes.DWORD)]
+
+            class _SYSTEMTIME(ctypes.Structure):
+                _fields_ = [
+                    ("wYear", wintypes.WORD),
+                    ("wMonth", wintypes.WORD),
+                    ("wDayOfWeek", wintypes.WORD),
+                    ("wDay", wintypes.WORD),
+                    ("wHour", wintypes.WORD),
+                    ("wMinute", wintypes.WORD),
+                    ("wSecond", wintypes.WORD),
+                    ("wMilliseconds", wintypes.WORD),
+                ]
+
+            class _BLUETOOTH_DEVICE_SEARCH_PARAMS(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("fReturnAuthenticated", wintypes.BOOL),
+                    ("fReturnRemembered", wintypes.BOOL),
+                    ("fReturnUnknown", wintypes.BOOL),
+                    ("fReturnConnected", wintypes.BOOL),
+                    ("fIssueInquiry", wintypes.BOOL),
+                    ("cTimeoutMultiplier", ctypes.c_ubyte),
+                    ("hRadio", wintypes.HANDLE),
+                ]
+
+            class _BLUETOOTH_DEVICE_INFO(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("Address", ctypes.c_ulonglong),
+                    ("ulClassofDevice", wintypes.ULONG),
+                    ("fConnected", wintypes.BOOL),
+                    ("fRemembered", wintypes.BOOL),
+                    ("fAuthenticated", wintypes.BOOL),
+                    ("stLastSeen", _SYSTEMTIME),
+                    ("stLastUsed", _SYSTEMTIME),
+                    ("szName", wintypes.WCHAR * 248),
+                ]
+
+            bth = ctypes.WinDLL(_system_exe("bthprops.cpl"))
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            k32.CloseHandle.restype = wintypes.BOOL
+
+            bth.BluetoothFindFirstRadio.argtypes = [
+                ctypes.POINTER(_BLUETOOTH_FIND_RADIO_PARAMS),
+                ctypes.POINTER(wintypes.HANDLE),
+            ]
+            bth.BluetoothFindFirstRadio.restype = wintypes.HANDLE
+            bth.BluetoothFindNextRadio.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.HANDLE)]
+            bth.BluetoothFindNextRadio.restype = wintypes.BOOL
+            bth.BluetoothFindRadioClose.argtypes = [wintypes.HANDLE]
+            bth.BluetoothFindRadioClose.restype = wintypes.BOOL
+
+            bth.BluetoothIsConnectable.argtypes = [wintypes.HANDLE]
+            bth.BluetoothIsConnectable.restype = wintypes.BOOL
+            bth.BluetoothIsDiscoverable.argtypes = [wintypes.HANDLE]
+            bth.BluetoothIsDiscoverable.restype = wintypes.BOOL
+
+            bth.BluetoothFindFirstDevice.argtypes = [
+                ctypes.POINTER(_BLUETOOTH_DEVICE_SEARCH_PARAMS),
+                ctypes.POINTER(_BLUETOOTH_DEVICE_INFO),
+            ]
+            bth.BluetoothFindFirstDevice.restype = wintypes.HANDLE
+            bth.BluetoothFindNextDevice.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(_BLUETOOTH_DEVICE_INFO),
+            ]
+            bth.BluetoothFindNextDevice.restype = wintypes.BOOL
+            bth.BluetoothFindDeviceClose.argtypes = [wintypes.HANDLE]
+            bth.BluetoothFindDeviceClose.restype = wintypes.BOOL
+
+            # Enumerate active radios
+            rp = _BLUETOOTH_FIND_RADIO_PARAMS(dwSize=ctypes.sizeof(_BLUETOOTH_FIND_RADIO_PARAMS))
+            hradio = wintypes.HANDLE()
+            hfind = bth.BluetoothFindFirstRadio(ctypes.byref(rp), ctypes.byref(hradio))
+            if hfind:
+                try:
+                    while True:
+                        state["active_radios"] += 1
+                        if bth.BluetoothIsConnectable(hradio):
+                            state["connectable"] = True
+                        if bth.BluetoothIsDiscoverable(hradio):
+                            state["discoverable"] = True
+                        k32.CloseHandle(hradio)
+                        hradio = wintypes.HANDLE()
+                        if not bth.BluetoothFindNextRadio(hfind, ctypes.byref(hradio)):
+                            break
+                finally:
+                    bth.BluetoothFindRadioClose(hfind)
+            else:
+                if bth.BluetoothIsConnectable(None):
+                    state["connectable"] = True
+                if bth.BluetoothIsDiscoverable(None):
+                    state["discoverable"] = True
+
+            # Enumerate cached/connected devices (no RF inquiry scan)
+            if state["active_radios"] > 0 or state["connectable"] or state["discoverable"]:
+                sp = _BLUETOOTH_DEVICE_SEARCH_PARAMS(
+                    dwSize=ctypes.sizeof(_BLUETOOTH_DEVICE_SEARCH_PARAMS),
+                    fReturnAuthenticated=1,
+                    fReturnRemembered=1,
+                    fReturnUnknown=0,
+                    fReturnConnected=1,
+                    fIssueInquiry=0,
+                    cTimeoutMultiplier=0,
+                    hRadio=None,
+                )
+                di = _BLUETOOTH_DEVICE_INFO(dwSize=ctypes.sizeof(_BLUETOOTH_DEVICE_INFO))
+                hdev = bth.BluetoothFindFirstDevice(ctypes.byref(sp), ctypes.byref(di))
+                if hdev:
+                    try:
+                        seen_addrs = set()
+                        while True:
+                            addr = int(di.Address)
+                            if addr not in seen_addrs:
+                                seen_addrs.add(addr)
+                                is_conn = bool(di.fConnected)
+                                is_auth = bool(di.fAuthenticated)
+                                is_rem = bool(di.fRemembered)
+                                if is_auth or is_rem:
+                                    state["paired_count"] += 1
+                                if is_conn:
+                                    state["connected_count"] += 1
+                                    if not is_auth:
+                                        state["unauthenticated_connected"] += 1
+                            if not bth.BluetoothFindNextDevice(hdev, ctypes.byref(di)):
+                                break
+                    finally:
+                        bth.BluetoothFindDeviceClose(hdev)
+        except (OSError, AttributeError, ValueError):
+            pass
+        return state
+
+    @staticmethod
+    def _query_bluetooth_exposure_extras():
+        """Inspect Nearby Sharing, Bluetooth PAN, active OBEX file transfer, and GPO/MDM Bluetooth policies."""
+        extras = {
+            "nearby_sharing_everyone": False,
+            "pan_active": False,
+            "file_transfer_active": False,
+            "policy_hardened": False,
+        }
+
+        # 1) Windows Nearby Sharing (2 = Everyone nearby)
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\CDP",
+                0,
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ) as k:
+                val, _ = winreg.QueryValueEx(k, "NearShareChannelUserAuthzPolicy")
+                if int(val) == 2:
+                    extras["nearby_sharing_everyone"] = True
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            pass
+
+        # 2) Active Bluetooth PAN network bridge
+        try:
+            for if_name, stats in psutil.net_if_stats().items():
+                if "bluetooth" in str(if_name).lower() and getattr(stats, "isup", False):
+                    extras["pan_active"] = True
+                    break
+        except Exception:
+            pass
+
+        # 3) Active OBEX Bluetooth File Transfer wizard (fsquirt.exe)
+        try:
+            for proc in psutil.process_iter(["name"]):
+                pname = str((proc.info or {}).get("name") or "").strip().lower()
+                if pname == "fsquirt.exe":
+                    extras["file_transfer_active"] = True
+                    break
+        except Exception:
+            pass
+
+        # 4) GPO / MDM Bluetooth hardening policies
+        policy_paths = (
+            r"SOFTWARE\Policies\Microsoft\Windows\Bluetooth",
+            r"SOFTWARE\Microsoft\PolicyManager\current\device\Bluetooth",
+        )
+        for ppath in policy_paths:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    ppath,
+                    0,
+                    winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                ) as k:
+                    for val_name in ("AllowDiscoverableMode", "AllowAdvertising", "AllowBluetooth"):
+                        try:
+                            val, _ = winreg.QueryValueEx(k, val_name)
+                            if int(val) == 0:
+                                extras["policy_hardened"] = True
+                                break
+                        except (FileNotFoundError, OSError, ValueError, TypeError):
+                            continue
+            except (FileNotFoundError, OSError):
+                continue
+            if extras["policy_hardened"]:
+                break
+
+        return extras
+
+    @classmethod
+    def _evaluate_bluetooth_verdict(cls, devices, win32_state, extras):
+        """Determine Bluetooth risk verdict and concise exposure summary."""
+        present_devices = [
+            d for d in (devices or [])
+            if isinstance(d, dict) and d.get("Present", True) is not False
+        ]
+        radios = [
+            d for d in present_devices
+            if cls._is_bluetooth_radio_controller(d.get("InstanceId"))
+        ]
+        # Fallback to core Bluetooth enumerator only if no USB/PCI/ACPI radio matched
+        if not radios:
+            radios = [
+                d for d in present_devices
+                if str(d.get("InstanceId") or "").strip().upper().startswith("BTH\\MS_BTHBRB")
+            ]
+
+        active_radios = int(win32_state.get("active_radios") or 0)
+        connectable = bool(win32_state.get("connectable"))
+        discoverable = bool(win32_state.get("discoverable"))
+        connected_count = int(win32_state.get("connected_count") or 0)
+        unauth_connected = int(win32_state.get("unauthenticated_connected") or 0)
+
+        radio_on = active_radios > 0 or connectable or discoverable
+
+        operational_radios = [
+            d for d in radios
+            if str(d.get("Status") or "").strip().upper() == "OK"
+        ]
+        disabled_radios = [
+            d for d in radios
+            if str(d.get("ProblemCode") or "").strip() == "22"
+        ]
+
+        if not radios and not radio_on:
+            return "Not Detected"
+
+        if not radio_on:
+            if disabled_radios:
+                return "Disabled (Hardware disabled)"
+            if operational_radios:
+                return "Disabled (Radio off)"
+            return "Disabled (Adapter unavailable)"
+
+        # Radio is active: evaluate radio-only driver signature and exposure indicators
+        radio_driver_unsigned = bool(operational_radios) and any(
+            d.get("DriverIsSigned") is not True for d in operational_radios
+        )
+
+        high_findings = []
+        moderate_findings = []
+
+        if discoverable:
+            high_findings.append("Discoverable")
+        if unauth_connected > 0:
+            high_findings.append(f"{unauth_connected} unauthenticated connected")
+
+        if radio_driver_unsigned:
+            moderate_findings.append("Unsigned/unknown radio driver")
+        if extras.get("nearby_sharing_everyone"):
+            moderate_findings.append("Nearby Sharing: Everyone")
+        if extras.get("pan_active"):
+            moderate_findings.append("Bluetooth PAN active")
+        if extras.get("file_transfer_active"):
+            moderate_findings.append("File transfer active (fsquirt)")
+
+        if high_findings:
+            details = high_findings + moderate_findings
+            if connected_count > 0 and unauth_connected == 0:
+                details.append(f"{connected_count} connected")
+            return f"Enabled, Exposure Detected ({'; '.join(details)})"
+
+        if moderate_findings:
+            if connected_count > 0:
+                moderate_findings.append(f"{connected_count} connected")
+            return f"Enabled, Moderate Risk ({'; '.join(moderate_findings)})"
+
+        context = ["Radio on, not discoverable"]
+        if connected_count > 0:
+            context.append(f"{connected_count} connected")
+        if extras.get("policy_hardened"):
+            context.append("Policy hardened")
+        return f"Enabled, Low Risk ({'; '.join(context)})"
+
     def check_bluetooth(self):
         try:
             ps_script = r"""
-            $ErrorActionPreference = 'Stop'
-
             $devices = @(
-                Get-PnpDevice -Class Bluetooth -ErrorAction Stop |
-                Select-Object Status, FriendlyName, InstanceId,
+                Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue |
+                Where-Object { $_.Present -eq $true } |
+                Select-Object Status, FriendlyName, InstanceId, Present,
                     @{Name='ProblemCode'; Expression={
                         try {
                             (Get-PnpDeviceProperty `
@@ -3701,18 +4449,16 @@ class RemoteAccessSettings:
                     }}
             )
 
-            # --- Bluetooth driver signature status ---
             $signedDrivers = @(
                 Get-CimInstance -ClassName Win32_PnPSignedDriver `
-                    -ErrorAction Stop |
+                    -Filter "DeviceClass='BLUETOOTH'" `
+                    -ErrorAction SilentlyContinue |
                 Select-Object DeviceID, IsSigned, Signer, DriverVersion
             )
 
             foreach ($device in $devices) {
                 $driver = $signedDrivers |
-                    Where-Object {
-                        $_.DeviceID -eq $device.InstanceId
-                    } |
+                    Where-Object { $_.DeviceID -eq $device.InstanceId } |
                     Select-Object -First 1
 
                 if ($null -ne $driver) {
@@ -3733,21 +4479,9 @@ class RemoteAccessSettings:
                 }
             }
 
-            $serviceStatus = 'Unknown'
-
-            try {
-                $serviceStatus = (
-                    Get-Service -Name bthserv -ErrorAction Stop
-                ).Status.ToString()
-            }
-            catch {
-                $serviceStatus = 'Unknown'
-            }
-
             [PSCustomObject]@{
                 QuerySucceeded = $true
                 Devices = @($devices)
-                ServiceStatus = $serviceStatus
             } | ConvertTo-Json -Depth 5 -Compress
             """
 
@@ -3774,80 +4508,16 @@ class RemoteAccessSettings:
                 raise ValueError("Empty PowerShell response")
 
             data = json.loads(output)
-
             if not data.get("QuerySucceeded", False):
                 raise ValueError("Bluetooth device query failed")
 
             devices = data.get("Devices", [])
-
             if isinstance(devices, dict):
                 devices = [devices]
 
-            if not devices:
-                return "Not detected"
-
-            # --- Check device status ---
-            operational_devices = [
-                device for device in devices
-                if str(device.get("Status", "")).strip().upper() == "OK"
-            ]
-
-            disabled_devices = [
-                device for device in devices
-                if str(device.get("ProblemCode", "")).strip() == "22"
-            ]
-
-            if not operational_devices:
-                if disabled_devices:
-                    return "Disabled"
-                return "Not detected"
-
-            # Driver signature information is now available in each
-            # device dictionary for reporting or further assessment.
-            service_status = data.get("ServiceStatus", "Unknown")
-
-           # --- Check connectability ---
-            try:
-                bluetooth_api = ctypes.WinDLL(_system_exe("bthprops.cpl"))
-
-                is_connectable = bluetooth_api.BluetoothIsConnectable
-                is_connectable.argtypes = [ctypes.c_void_p]
-                is_connectable.restype = ctypes.c_int
-
-                connectable = bool(is_connectable(None))
-
-            except (OSError, AttributeError):
-                connectable = False
-
-            # --- Assess driver signature ---
-            signed_status = (
-                "Signed"
-                if all(
-                    device.get("DriverIsSigned") is True
-                    for device in operational_devices
-                )
-                else "Unknown"
-            )
-            
-            if signed_status != "Signed":
-                signed_error = True
-            else:
-                signed_error = False
-
-            # --- Assess risk ---
-            if connectable and signed_error:
-                return "Enabled, Moderate Risk (Bluetooth driver unknown or unsigned)"
-
-            elif connectable and service_status == "Running":
-                return "Enabled, Low Risk (Default settings)"
-
-            elif connectable and service_status == "Stopped":
-                return "Enabled, Moderate Risk (Support Service stopped)"
-
-            elif service_status == "Stopped":
-                return "Enabled, Exposure status unknown"
-
-            return "Enabled, Exposure status unknown"
+            win32_state = self._query_bluetooth_win32_state()
+            extras = self._query_bluetooth_exposure_extras()
+            return self._evaluate_bluetooth_verdict(devices, win32_state, extras)
 
         except (
             subprocess.SubprocessError,
@@ -3934,6 +4604,28 @@ class RemoteAccessSettings:
 
         return "Enabled, Moderate Risk (Signing/Encryption not required)"
 
+    @staticmethod
+    def check_pku2u():
+        """Check PKU2U online-identity authentication policy (HKLM\\...\\Lsa\\pku2u\\AllowOnlineID)."""
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Lsa\pku2u",
+                0,
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ) as k:
+                val, _ = winreg.QueryValueEx(k, "AllowOnlineID")
+            allow = int(val)
+            if allow == 0:
+                return "Disabled"
+            if allow == 1:
+                return "Enabled, Moderate Risk (Online identities allowed)"
+            return "Unknown"
+        except FileNotFoundError:
+            return "Enabled, Default (Not configured; allows online IDs)"
+        except (PermissionError, OSError, ValueError, TypeError):
+            return "Unknown"
+
     def get_remote_access_settings(self):
         global _remote_access_cache
         global run_all_clicked
@@ -3950,6 +4642,7 @@ class RemoteAccessSettings:
             "FTP Service": "Unknown",
             "Rsync Service": "Unknown",
             "RPC Print Spooler": "Unknown",
+            "PKU2U Authentication": "Unknown",
             "Bluetooth": "Unknown",
             "UPnPHost": "Unknown",
             "NetBIOS": "Unknown",
@@ -4078,19 +4771,43 @@ class RemoteAccessSettings:
         # --- Bluetooth ---
         result["Bluetooth"] = self.check_bluetooth()
 
-        # --- DCOM ---
+        # --- DCOM (direct registry read including Ole\AppCompat KB5004442 hardening) ---
         try:
-            # --- Check if DCOM is enabled ---
-            reg_output = _run_check_output(
-                [
-                    "powershell.exe",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    r"Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Ole -ErrorAction SilentlyContinue | Select-Object -ExpandProperty EnableDCOM",
-                ],
-                shell=False,
-            ).strip()
+            reg_output = ""
+            auth_output = ""
+            harden_val = None
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Ole",
+                0,
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ) as ole_key:
+                try:
+                    val, _ = winreg.QueryValueEx(ole_key, "EnableDCOM")
+                    reg_output = str(val).strip().upper()
+                except FileNotFoundError:
+                    reg_output = ""
+                try:
+                    val, _ = winreg.QueryValueEx(ole_key, "LegacyAuthenticationLevel")
+                    auth_output = str(val).strip()
+                except FileNotFoundError:
+                    auth_output = ""
+
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Ole\AppCompat",
+                    0,
+                    winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                ) as appcompat_key:
+                    val, _ = winreg.QueryValueEx(
+                        appcompat_key,
+                        "RequireIntegrityActivationAuthenticationLevel",
+                    )
+                    harden_val = int(val)
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                harden_val = None
 
             # --- Check Windows Firewall profiles ---
             try:
@@ -4111,45 +4828,25 @@ class RemoteAccessSettings:
                 firewall_state = "Unknown"
 
             if reg_output == "Y":
-                # 🔹 Check authentication level
-                try:
-                    auth_output = _run_check_output(
-                        [
-                            "powershell.exe",
-                            "-NoProfile",
-                            "-NonInteractive",
-                            "-Command",
-                            r"Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Ole -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LegacyAuthenticationLevel",
-                        ],
-                        shell=False,
-                    ).strip()
-                    level_map = {
-                        "1": "None (Dangerous)",
-                        "2": "Connect",
-                        "3": "Call",
-                        "4": "Packet",
-                        "5": "Packet Integrity (Safe)",
-                        "6": "Packet Privacy (Best)"
-                    }
-                    auth_state = level_map.get(auth_output, "Unknown")
-                except Exception:
-                    auth_state = "Unknown"
+                level_map = {
+                    "1": "None (Dangerous)",
+                    "2": "Connect",
+                    "3": "Call",
+                    "4": "Packet",
+                    "5": "Packet Integrity (Safe)",
+                    "6": "Packet Privacy (Best)"
+                }
+                auth_state = level_map.get(auth_output, "Unknown")
 
-                # 🔹 Check for Microsoft DCOM Hardening flag
-                try:
-                    harden_output = _run_check_output(
-                        [
-                            "powershell.exe",
-                            "-NoProfile",
-                            "-NonInteractive",
-                            "-Command",
-                            r"Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Ole -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RequireIntegrityActivationAuthenticationLevel",
-                        ],
-                        shell=False,
-                    ).strip()
-                    harden_state = "Enabled" if harden_output == "1" else "Disabled"
-                except Exception:
-                    harden_state = "Unknown"
+                # KB5004442: post-March-2023 Windows enforces DCOM hardening by default unless explicitly 0
+                if harden_val == 1:
+                    harden_state = "Enabled"
+                elif harden_val == 0:
+                    harden_state = "Disabled"
+                else:
+                    local_os = get_local_windows_info() or {}
+                    os_build = int(local_os.get("Build") or 0)
+                    harden_state = "Enabled" if os_build >= 19041 else "Unknown"
 
                 # 🔹 Determine final verdict
                 if auth_state in ["Packet Integrity (Safe)", "Packet Privacy (Best)"]:
@@ -4213,74 +4910,105 @@ class RemoteAccessSettings:
 
         # --- PowerShell Remoting (WinRM) ---
         try:
-            # Check if WinRM service exists and status
-            ps_status = (
-                "if (Get-Service -Name WinRM -ErrorAction SilentlyContinue) "
-                "{ (Get-Service -Name WinRM).Status } else { 'NotInstalled' }"
-            )
-            winrm_status = _run_check_output(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_status],
-                shell=False,
-            ).strip().lower()
-
-            if not winrm_status or winrm_status == "notinstalled":
-                result["PowerShell Remoting"] = "Disabled"
-            elif winrm_status != "running":
+            winrm_svc = self.check_winrm_service()
+            if winrm_svc.get("status") == "Unknown":
+                result["PowerShell Remoting"] = "Unknown"
+            elif winrm_svc.get("status") != "Enabled" or not winrm_svc.get("running"):
                 result["PowerShell Remoting"] = "Disabled"
             else:
-                # Check if any WSMan listener exists (Server 2022 reliable method)
-                ps_listener = r"if (Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue) {'Enabled'} else {'Disabled'}"
-                listener_status = _run_check_output(
-                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_listener],
-                    shell=False,
-                ).strip().lower()
+                listeners_info = self.check_listeners()
+                winrm_ports = self.check_ports()
 
-                if "enabled" in listener_status:
+                if listeners_info.get("http") or listeners_info.get("https"):
                     result["PowerShell Remoting"] = "Enabled, Potentially Dangerous"
-                else:
-                    # Fallback: AllowRemoteShellAccess registry
-                    ps_reg = (
-                        r"$val = (Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service -ErrorAction SilentlyContinue).AllowRemoteShellAccess; "
-                        r"if ($val -eq $null) {'Unknown'} elseif ($val -eq 1 -or $val -eq 'true') {'Enabled'} else {'Disabled'}"
-                    )
-                    reg_status = _run_check_output(
-                        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_reg],
-                        shell=False,
-                    ).strip().lower()
-                    if reg_status in ("enabled", "1", "true"):
-                        result["PowerShell Remoting"] = "Enabled, Potentially Dangerous"
-                    elif reg_status == "disabled":
+                elif listeners_info.get("unknown"):
+                    # Non-admin fallback: inspect listening ports and WSMAN\WinRS registry policy
+                    allow_shell = None
+                    for reg_path in (
+                        r"SOFTWARE\Policies\Microsoft\Windows\WinRM\Service\WinRS",
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\WinRS",
+                    ):
+                        try:
+                            with winreg.OpenKey(
+                                winreg.HKEY_LOCAL_MACHINE,
+                                reg_path,
+                                0,
+                                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                            ) as k:
+                                val, _ = winreg.QueryValueEx(k, "AllowRemoteShellAccess")
+                                allow_shell = int(val)
+                                break
+                        except (FileNotFoundError, OSError, ValueError, TypeError):
+                            continue
+
+                    if allow_shell == 0:
                         result["PowerShell Remoting"] = "Disabled"
+                    elif winrm_ports:
+                        result["PowerShell Remoting"] = "Enabled, Potentially Dangerous"
                     else:
                         result["PowerShell Remoting"] = "Unknown"
+                else:
+                    result["PowerShell Remoting"] = "Disabled"
 
         except Exception:
             result["PowerShell Remoting"] = "Unknown"
 
         # --- RPC Print Spooler ---
         try:
-            key_path = r"SYSTEM\CurrentControlSet\Control\Print"
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                key_path,
-                0,
-                winreg.KEY_READ | winreg.KEY_WOW64_64KEY
-            ) as key:
-                try:
-                    rpc_value, _ = winreg.QueryValueEx(key, "RpcEnabled")
-                except FileNotFoundError:
-                    rpc_value = None
+            spooler_qc = _run(["sc", "qc", "Spooler"]).upper()
+            spooler_query = _run(["sc", "query", "Spooler"]).upper()
 
-                if rpc_value == 1:
+            if not spooler_qc and not spooler_query:
+                result["RPC Print Spooler"] = "Unknown"
+            elif "DISABLED" in spooler_qc or "STOPPED" in spooler_query or "1060" in spooler_qc:
+                result["RPC Print Spooler"] = "Disabled"
+            else:
+                # Check GPO disabling remote RPC endpoint (RegisterSpoolerRemoteRpcEndPoint == 2)
+                remote_rpc_disabled = False
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        r"SOFTWARE\Policies\Microsoft\Windows NT\Printers",
+                        0,
+                        winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                    ) as pk:
+                        val, _ = winreg.QueryValueEx(pk, "RegisterSpoolerRemoteRpcEndPoint")
+                        if int(val) == 2:
+                            remote_rpc_disabled = True
+                except (FileNotFoundError, OSError, ValueError, TypeError):
+                    pass
+
+                if remote_rpc_disabled:
+                    verdict = "Disabled"
+                else:
+                    restrict_clients = 0
                     try:
-                        restrict_clients, _ = winreg.QueryValueEx(key, "RestrictRemoteClients")
-                    except FileNotFoundError:
+                        with winreg.OpenKey(
+                            winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Policies\Microsoft\Windows NT\Rpc",
+                            0,
+                            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                        ) as rk:
+                            val, _ = winreg.QueryValueEx(rk, "RestrictRemoteClients")
+                            restrict_clients = 1 if int(val) >= 1 else 0
+                    except (FileNotFoundError, OSError, ValueError, TypeError):
                         restrict_clients = 0
 
+                    # CVE-2021-1678: patched Windows defaults RpcAuthnLevelPrivacyEnabled to 1 when absent
+                    privacy_enabled = None
                     try:
-                        privacy_enabled, _ = winreg.QueryValueEx(key, "RpcAuthnLevelPrivacyEnabled")
-                    except FileNotFoundError:
-                        privacy_enabled = 0
+                        with winreg.OpenKey(
+                            winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Control\Print",
+                            0,
+                            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                        ) as print_key:
+                            val, _ = winreg.QueryValueEx(print_key, "RpcAuthnLevelPrivacyEnabled")
+                            privacy_enabled = 1 if int(val) == 1 else 0
+                    except (FileNotFoundError, OSError, ValueError, TypeError):
+                        local_os = get_local_windows_info() or {}
+                        os_build = int(local_os.get("Build") or 0)
+                        privacy_enabled = 1 if os_build >= 19041 else 0
 
                     if restrict_clients == 1 and privacy_enabled == 1:
                         verdict = "Enabled, Low Risk (Restricted access)"
@@ -4288,13 +5016,9 @@ class RemoteAccessSettings:
                         verdict = "Enabled, Moderate Risk (Partially restricted)"
                     else:
                         verdict = "Enabled, Potentially Dangerous (Unrestricted network access)"
-                else:
-                    verdict = "Disabled"
 
-            result["RPC Print Spooler"] = verdict
+                result["RPC Print Spooler"] = verdict
 
-        except FileNotFoundError:
-            result["RPC Print Spooler"] = "Disabled"
         except Exception:
             result["RPC Print Spooler"] = "Unknown"
 
@@ -4481,158 +5205,103 @@ class RemoteAccessSettings:
             service_state = None
             ftp_detected = False
             ftp_port = None
+            custom_ftp_port = None
             sftp = False
             tftp_detected = False
+            ftp_service_pids = set()
+            sshd_running = False
+            pid_service_counts = {}
 
-            # 1. Known FTP services
-            ftp_services = {
-                "ftpsvc": "IIS FTP Service",
-                "filezilla": "FileZilla Server"
-            }
-
+            # 1. Known FTP & SSH services via psutil (in-process, locale-independent)
             try:
-                ps_services = (
-                    "Get-Service | Where-Object { $_.Name -match 'ftpsvc|filezilla' } | "
-                    "Select-Object Name, Status | ConvertTo-Json"
-                )
-                services = _run_check_output(
-                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_services],
-                    shell=False,
-                ).strip()
+                for svc in psutil.win_service_iter():
+                    try:
+                        svc_name = (svc.name() or "").lower()
+                        svc_status = (svc.status() or "").lower()
+                        svc_pid = svc.pid()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                        continue
 
-                if services:
-                    data = json.loads(services)
+                    if svc_pid:
+                        pid_service_counts[svc_pid] = pid_service_counts.get(svc_pid, 0) + 1
 
-                    if isinstance(data, dict):
-                        data = [data]
-
-                    for svc in data:
-                        name = svc.get("Name", "").lower()
-                        status = svc.get("Status")
-
-                        if "filezilla" in name or "ftpsvc" in name:
-                            ftp_detected = True
-
-                            if status == "Running":
-                                service_state = "Running"
-                            elif status == "Stopped" and service_state is None:
-                                service_state = "Stopped"
-
+                    if "ftpsvc" in svc_name or "filezilla" in svc_name:
+                        ftp_detected = True
+                        if svc_status == "running":
+                            service_state = "Running"
+                            if svc_pid:
+                                ftp_service_pids.add(svc_pid)
+                        elif svc_status == "stopped" and service_state is None:
+                            service_state = "Stopped"
+                    elif svc_name == "sshd" and svc_status == "running":
+                        sshd_running = True
             except Exception:
                 pass
 
-            # 2. TCP port detection (FTP/FTPS/HTTP)
+            # 2. FileZilla process detection (also captures PID for custom port check)
             try:
-                netstat = _run_check_output(["netstat", "-ano"], shell=False)
-
-                for line in netstat.splitlines():
-                    if not re.search(r"\bLISTENING\b", line, re.IGNORECASE):
-                        continue
-
-                    match = re.search(
-                        r"^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\b",
-                        line,
-                        re.IGNORECASE
-                    )
-
-                    if not match:
-                        continue
-
-                    port = int(match.group(1))
-
-                    if port in (21, 990):
-                        ftp_port = port
-
-                        if not (ftp_detected and service_state == "Stopped"):
+                for proc in psutil.process_iter(["pid", "name"]):
+                    try:
+                        pname = (proc.info.get("name") or "").lower()
+                        if pname == "filezilla server.exe":
                             ftp_detected = True
                             service_state = "Running"
-
-                        break
-
+                            if proc.pid:
+                                ftp_service_pids.add(proc.pid)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
             except Exception:
                 pass
 
-            # 3. FileZilla process detection
-            if not ftp_detected:
-                try:
-                    tasklist = _run_check_output(["tasklist"], shell=False).lower()
-
-                    if "filezilla server.exe" in tasklist:
+            # 3. TCP port detection via psutil (FTP 21, FTPS 990, SFTP 22, and custom FTP service ports)
+            tcp_conns_ok = False
+            try:
+                tcp_conns = psutil.net_connections(kind="tcp")
+                tcp_conns_ok = True
+                for conn in tcp_conns:
+                    if conn.status != psutil.CONN_LISTEN or not conn.laddr:
+                        continue
+                    port = conn.laddr.port
+                    if port in (21, 990):
+                        if ftp_port is None or port == 21:
+                            ftp_port = port
                         ftp_detected = True
                         service_state = "Running"
-
-                except Exception:
-                    pass
-
-            # 4. SFTP detection (OpenSSH Server + TCP 22)
-            try:
-                ssh_service = _run_check_output(
-                    [
-                        "powershell.exe",
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        "Get-Service -Name sshd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status",
-                    ],
-                    shell=False,
-                ).strip()
-
-                if ssh_service == "Running":
-                    try:
-                        netstat = _run_check_output(["netstat", "-ano"], shell=False)
-
-                        if re.search(r":22\s+.*LISTENING", netstat, re.IGNORECASE):
-                            sftp = True
-
-                    except Exception:
-                        pass
-
+                    elif port == 22 and sshd_running:
+                        sftp = True
+                    elif (
+                        conn.pid
+                        and conn.pid in ftp_service_pids
+                        and pid_service_counts.get(conn.pid, 1) <= 1
+                        and 0 < port < 49152
+                    ):
+                        if custom_ftp_port is None or port < custom_ftp_port:
+                            custom_ftp_port = port
             except Exception:
-                pass
+                tcp_conns_ok = False
 
-            # 5. TFTP detection (UDP port 69 + process)
+            # 4. TFTP detection (UDP port 69 + known TFTP process)
             try:
-                netstat = _run_check_output(["netstat", "-ano", "-p", "udp"], shell=False)
-
-                for line in netstat.splitlines():
-                    match = re.search(
-                        r"^\s*UDP\s+\S+:69\s+\S+\s+(\d+)\s*$",
-                        line,
-                        re.IGNORECASE
-                    )
-
-                    if not match:
+                tftp_names = {
+                    "tftpd.exe",
+                    "tftpserver.exe",
+                    "tftpsrv.exe",
+                    "solarwinds tftp server.exe",
+                }
+                for conn in psutil.net_connections(kind="udp"):
+                    if not conn.laddr or conn.laddr.port != 69 or not conn.pid:
                         continue
-
-                    tftp_pid = int(match.group(1))
-
                     try:
-                        tasklist = _run_check_output(
-                            ["tasklist", "/FI", f"PID eq {tftp_pid}", "/FO", "CSV", "/NH"],
-                            shell=False,
-                        ).strip().lower()
-
-                        # Confirm the process belongs to a known TFTP server
-                        if any(name in tasklist for name in (
-                            "tftpd.exe",
-                            "tftpserver.exe",
-                            "tftpsrv.exe",
-                            "solarwinds tftp server.exe"
-                        )):
+                        if (psutil.Process(conn.pid).name() or "").lower() in tftp_names:
                             tftp_detected = True
                             break
-
-                    except Exception:
-                        pass
-
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                        continue
             except Exception:
                 pass
 
-            # 6. Final normalization
-            if ftp_detected and service_state == "Stopped":
-                result["FTP Service"] = "Stopped"
-
-            elif ftp_detected and ftp_port == 21:
+            # 5. Final normalization (evaluate active listeners/running services BEFORE stopped)
+            if ftp_detected and ftp_port == 21:
                 result["FTP Service"] = (
                     "Running, Potentially Exposed (FTP Port 21)"
                 )
@@ -4652,8 +5321,19 @@ class RemoteAccessSettings:
                     "Running, Potentially Exposed (TFTP Port 69)"
                 )
 
+            elif ftp_detected and custom_ftp_port:
+                result["FTP Service"] = (
+                    f"Running, Potentially Exposed (FTP Port {custom_ftp_port})"
+                )
+
             elif ftp_detected and service_state == "Running":
-                result["FTP Service"] = "Running, Unknown Port"
+                if tcp_conns_ok:
+                    result["FTP Service"] = "Running, No Active Listener"
+                else:
+                    result["FTP Service"] = "Running, Unknown Port"
+
+            elif ftp_detected and service_state == "Stopped":
+                result["FTP Service"] = "Stopped"
 
             else:
                 result["FTP Service"] = "Not Detected"
@@ -4665,62 +5345,69 @@ class RemoteAccessSettings:
         winrm_data = self.audit_winrm()         # run full WinRM audit
         result["WinRM"] = winrm_data["verdict"]
 
+        # --- PKU2U Authentication ---
+        result["PKU2U Authentication"] = self.check_pku2u()
+
         _remote_access_cache = result
         
         return _remote_access_cache
 
     def format_remote_access_settings(self, settings):
-        """Formats remote access settings as a clean table."""
+        """Formats remote access settings as a wide, spaced 98-char table with row separators."""
+        if not isinstance(settings, dict) or not settings:
+            return "\n    None Detected"
 
-        lines = [""]
+        w_set, w_stat, w_det = 30, 24, 36
+        gap = "    "
+        total_w = w_set + len(gap) + w_stat + len(gap) + w_det  # 98 chars
+        sep = " " + ("–" * total_w)
 
-        headers = ("Setting", "Status", "Remarks")
+        def _clip(text, width):
+            s = str(text or "Unknown").strip() or "Unknown"
+            return s if len(s) <= width else s[: max(1, width - 3)].rstrip() + "..."
+
         rows = []
-
         for key, value in settings.items():
-            value = str(value or "Unknown")
+            val_str = str(value or "Unknown").strip()
 
-            if value.startswith("Enabled, "):
+            if val_str.startswith("Enabled, "):
                 status = "Enabled"
-                remarks = value[len("Enabled, "):]
-
-            elif value.startswith("Running, "):
+                details = val_str[len("Enabled, "):].strip() or "–"
+            elif val_str.startswith("Running, "):
                 status = "Running"
-                remarks = value[len("Running, "):]
-
-            elif value.startswith("Remote Disabled"):
+                details = val_str[len("Running, "):].strip() or "–"
+            elif val_str.startswith("Remote Disabled"):
                 status = "Disabled"
-                remarks = "-"
-
-            elif value.startswith("Disabled"):
+                details = "Remote disabled"
+            elif val_str.startswith("Disabled"):
                 status = "Disabled"
-                remarks = value[len("Disabled"):].strip(" ,()") or "-"
-
+                details = val_str[len("Disabled"):].strip(" ,()") or "–"
             else:
-                status = value
-                remarks = "-"
+                status = val_str or "Unknown"
+                details = "–"
 
-            rows.append((key, status, remarks))
+            rows.append((key, status, details))
 
-        if rows:
-            lines.append(
-                f"{headers[0]:<30}"
-                f"{headers[1]:<20}"
-                f"{headers[2]}"
-            )
-            lines.append("–" * 80)
+        if not rows:
+            return "\n    None Detected"
 
-            for i, (key, status, remarks) in enumerate(rows):
-                lines.append(
-                    f"{key:<30}"
-                    f"{status:<20}"
-                    f"{remarks}"
-                )
+        lines = [
+            "",
+            f" {'Setting':<{w_set}}{gap}{'Status':<{w_stat}}{gap}{'Details':<{w_det}}".rstrip(),
+            sep,
+        ]
 
-                if i < len(rows) - 1 and rows[i + 1][0]:
-                    lines.append("–" * 80)
-        else:
-            lines.append("    None Detected")
+        cont_prefix = " " + (" " * w_set) + gap + (" " * w_stat) + gap
+        for idx, (key, status, details) in enumerate(rows):
+            k_col = _clip(key, w_set) if key else ""
+            s_col = _clip(status, w_stat)
+            d_text = str(details or "–").strip() or "–"
+            wrapped = textwrap.wrap(d_text, width=w_det, break_long_words=True, break_on_hyphens=False) or ["–"]
+            lines.append(f" {k_col:<{w_set}}{gap}{s_col:<{w_stat}}{gap}{wrapped[0]}".rstrip())
+            for cont in wrapped[1:]:
+                lines.append(f"{cont_prefix}{cont}".rstrip())
+            if idx < len(rows) - 1 and rows[idx + 1][0]:
+                lines.append(sep)
 
         return "\n".join(lines)
 
@@ -4732,53 +5419,205 @@ class RemoteAccessSettings:
 # ===== Domain Settings =====
 class DomainSettings:
 
+    @staticmethod
+    def _format_illustration(data):
+        """Build a compact Option 1 identity and trust flow diagram."""
+        def _short(text, max_len):
+            s = str(text or "Unknown").strip() or "Unknown"
+            return s if len(s) <= max_len else s[: max(1, max_len - 3)].rstrip() + "..."
+
+        def _count_enabled(raw_users):
+            items = [str(u).strip() for u in (raw_users or []) if str(u).strip()]
+            if not items:
+                return 0, False
+            tagged = any(
+                "(enabled)" in u.lower() or "(disabled)" in u.lower()
+                for u in items
+            )
+            if tagged:
+                return sum(1 for u in items if "(enabled)" in u.lower()), True
+            return len(items), False
+
+        aff_type = str(data.get("Type") or "Unknown").strip() or "Unknown"
+        aff_name = str(data.get("Name") or "–").strip() or "–"
+        hostname = str(data.get("Hostname") or "Unknown").strip() or "Unknown"
+        domain_role = str(data.get("Domain Role") or "Unknown").strip() or "Unknown"
+        current_user = str(data.get("Current User") or "Unknown").strip() or "Unknown"
+
+        priv_cnt, priv_tagged = _count_enabled(data.get("Privileged Users", []))
+        reg_cnt, reg_tagged = _count_enabled(data.get("Regular Users", []))
+        acct_suffix = " (Enabled)" if (priv_tagged or reg_tagged) else ""
+        acct_summary = f"{priv_cnt} Priv / {reg_cnt} Reg{acct_suffix}"
+
+        laps_raw = str(data.get("LAPS Status") or data.get("LAPS") or "Not Detected").strip()
+        laps_status = laps_raw.split("(", 1)[0].strip() if "(" in laps_raw else (laps_raw or "Not Detected")
+
+        ntlm_raw = str(data.get("NTLM Policy") or "Unknown").strip()
+        ntlm_status = ntlm_raw.split(",", 1)[0].strip() if "," in ntlm_raw else (ntlm_raw or "Unknown")
+
+        ntp_raw = str(data.get("NTP") or "Unknown").strip() or "Unknown"
+        ntp_l = ntp_raw.lower()
+        if "running" in ntp_l:
+            ntp_status = "Running"
+        elif "stopped" in ntp_l:
+            ntp_status = "Stopped"
+        elif "disabled" in ntp_l:
+            ntp_status = "Disabled"
+        else:
+            ntp_status = _short(ntp_raw, 16)
+
+        aff_l = aff_type.lower()
+        if "hybrid" in aff_l:
+            authority = "Hybrid AD / Entra ID"
+            edge_tag = f"Hybrid: {_short(aff_name, 16)}" if aff_name != "–" else "Hybrid"
+        elif "azure" in aff_l or "entra" in aff_l:
+            authority = "Entra ID"
+            edge_tag = f"Entra ID: {_short(aff_name, 16)}" if aff_name != "–" else "Entra ID"
+        elif "domain" in aff_l:
+            authority = "Active Directory"
+            edge_tag = f"Domain: {_short(aff_name, 18)}" if aff_name != "–" else "Domain"
+        elif "workgroup" in aff_l:
+            authority = "Local SAM"
+            edge_tag = f"Workgroup: {_short(aff_name, 16)}" if aff_name != "–" else "Workgroup"
+        else:
+            authority = "Local Authority"
+            edge_tag = _short(aff_type, 20)
+
+        user_label = _short(current_user, 22)
+        host_label = _short(hostname, 18)
+        role_short = _short(domain_role, 26)
+
+        ntlm_l = ntlm_status.lower()
+        prefix = f"   [ {user_label} ] ---> "
+        pad = " " * len(prefix)
+
+        if "exposed" in ntlm_l or "weak" in ntlm_l:
+            arrow = f"--! ( {edge_tag} ) !-->"
+            ctrl_line = f"{pad}└─ Alert: NTLM {ntlm_status} | LAPS: {laps_status} | NTP: {ntp_status}"
+        elif "strong" in ntlm_l:
+            arrow = f"===( {edge_tag} )===>"
+            ctrl_line = f"{pad}└─ LAPS: {laps_status} | NTLM: {ntlm_status} | NTP: {ntp_status}"
+        else:
+            arrow = f"---( {edge_tag} )--->"
+            ctrl_line = f"{pad}└─ LAPS: {laps_status} | NTLM: {ntlm_status} | NTP: {ntp_status}"
+
+        return "\n".join([
+            " Illustration:",
+            f"{prefix}[ {host_label} ] {arrow} [ {authority} ]",
+            f"{pad}├─ Role: {role_short} | Accounts: {acct_summary}",
+            ctrl_line,
+        ])
+
     def format_domain_settings(self, data):
-        report = [""]
+        """Format domain/workgroup identity and security posture as a wide 98-char table."""
+        if not isinstance(data, dict) or not data:
+            return "\n    None Detected"
 
-        # Basic info
-        for key in ["Type", "Name", "Hostname", "Current User", "Domain Role"]:
-            report.append(f"{key}:")
-            report.append(f"  {data.get(key, 'Unknown')}")
-            report.append("–" * 50)
+        w_set, w_stat, w_det = 30, 24, 36
+        gap = "    "
+        total_w = w_set + len(gap) + w_stat + len(gap) + w_det  # 98 chars
+        sep = " " + ("–" * total_w)
 
-        # Privileged Users
-        report.append("Privileged Users:")
-        privileged = data.get("Privileged Users", [])
-        if privileged:
-            for user in privileged:
-                report.append(f"  {user}")
+        def _clip(text, width):
+            s = str(text or "Unknown").strip() or "Unknown"
+            return s if len(s) <= width else s[: max(1, width - 3)].rstrip() + "..."
+
+        def _summarize_users(raw_users):
+            items = [str(u).strip() for u in (raw_users or []) if str(u).strip()]
+            if not items:
+                return "None", ["–"]
+            en = sum(1 for u in items if "(enabled)" in u.lower())
+            dis = sum(1 for u in items if "(disabled)" in u.lower())
+            # Show Enabled accounts first, then alphabetical
+            ordered = sorted(
+                items,
+                key=lambda u: (0 if "(enabled)" in u.lower() else 1, u.lower()),
+            )
+            if en > 0 or dis > 0:
+                status = f"{en} Enabled / {dis} Disabled"
+            else:
+                noun = "Account" if len(items) == 1 else "Accounts"
+                status = f"{len(items)} {noun}"
+            return status, ordered
+
+        aff_type = str(data.get("Type") or "Unknown").strip() or "Unknown"
+        aff_name = str(data.get("Name") or "–").strip() or "–"
+        hostname = str(data.get("Hostname") or "Unknown").strip() or "Unknown"
+        domain_role = str(data.get("Domain Role") or "–").strip() or "–"
+        current_user = str(data.get("Current User") or "Unknown").strip() or "Unknown"
+
+        priv_status, priv_list = _summarize_users(data.get("Privileged Users", []))
+        reg_status, reg_list = _summarize_users(data.get("Regular Users", []))
+
+        laps_raw = str(data.get("LAPS Status") or data.get("LAPS") or "Not Detected").strip()
+        if "(" in laps_raw and ")" in laps_raw:
+            laps_status, laps_rem = laps_raw.split("(", 1)
+            laps_status = laps_status.strip() or "Unknown"
+            laps_details = laps_rem.rsplit(")", 1)[0].strip() or "–"
         else:
-            report.append("  (None)")
-        report.append("–" * 50)
+            laps_status = laps_raw or "Not Detected"
+            laps_details = "–"
 
-        # Regular Users
-        report.append("Regular Users:")
-        regular = data.get("Regular Users", [])
-        if regular:
-            for user in regular:
-                report.append(f"  {user}")
+        ntlm_raw = str(data.get("NTLM Policy") or "Unknown").strip()
+        if "," in ntlm_raw:
+            ntlm_status, ntlm_details = (p.strip() for p in ntlm_raw.split(",", 1))
+            ntlm_status = ntlm_status or "Unknown"
+            ntlm_details = ntlm_details or "–"
         else:
-            report.append("  (None)")
-        report.append("–" * 50)
+            ntlm_status = ntlm_raw or "Unknown"
+            ntlm_details = "–"
 
-        # LAPS Status
-        laps_status = data.get("LAPS Status", "Not Detected")
-        report.append("LAPS Status:")
-        report.append(f"  {laps_status}")
-        report.append("–" * 50)
+        ntp_raw = str(data.get("NTP") or "Unknown").strip() or "Unknown"
+        ntp_l = ntp_raw.lower()
+        if "running" in ntp_l:
+            ntp_status, ntp_details = "Running", ntp_raw
+        elif "stopped" in ntp_l:
+            ntp_status, ntp_details = "Stopped", ntp_raw
+        elif "disabled" in ntp_l:
+            ntp_status, ntp_details = "Disabled", ntp_raw
+        else:
+            ntp_status, ntp_details = ntp_raw, "–"
 
-        # NTLM Policy
-        ntlm_policy = data.get("NTLM Policy") or "Unknown"
-        report.append("NTLM Policy:")
-        report.append(f"  {ntlm_policy}")
-        report.append("–" * 50)
-        
-        # NTP Role
-        ntp = data.get("NTP", "None")
-        report.append("NTP:")
-        report.append(f"  {ntp}")
-        
-        return "\n".join(report)
+        rows = [
+            ("Affiliation", aff_type, [aff_name]),
+            ("Hostname", hostname, [domain_role]),
+            ("Current User", current_user, ["Active session"]),
+            ("Privileged Users", priv_status, priv_list),
+            ("Regular Users", reg_status, reg_list),
+            ("LAPS Protection", laps_status, [laps_details]),
+            ("NTLM Policy", ntlm_status, [ntlm_details]),
+            ("Time Sync (NTP)", ntp_status, [ntp_details]),
+        ]
+
+        lines = [
+            "",
+            f" {'Setting':<{w_set}}{gap}{'Status':<{w_stat}}{gap}{'Details':<{w_det}}".rstrip(),
+            sep,
+        ]
+
+        cont_prefix = " " + (" " * w_set) + gap + (" " * w_stat) + gap
+        for idx, (setting, status, detail_items) in enumerate(rows):
+            s_col = _clip(setting, w_set)
+            st_col = _clip(status, w_stat)
+
+            wrapped_lines = []
+            for d_item in detail_items:
+                d_txt = str(d_item or "–").strip() or "–"
+                w_parts = textwrap.wrap(d_txt, width=w_det, break_long_words=True, break_on_hyphens=False) or ["–"]
+                wrapped_lines.extend(w_parts)
+            if not wrapped_lines:
+                wrapped_lines = ["–"]
+
+            lines.append(f" {s_col:<{w_set}}{gap}{st_col:<{w_stat}}{gap}{wrapped_lines[0]}".rstrip())
+            for cont in wrapped_lines[1:]:
+                lines.append(f"{cont_prefix}{cont}".rstrip())
+            if idx < len(rows) - 1:
+                lines.append(sep)
+
+        lines.append(sep)
+        lines.append(self._format_illustration(data))
+
+        return "\n".join(lines)
 
     def show_domain_settings(self):
         raw = get_domain_settings()            # collect raw data
@@ -4885,8 +5724,111 @@ class PasswordPolicy:
 
         return "Unknown"
 
+    @staticmethod
+    def _check_windows_hello_pin():
+        """
+        Check whether Windows Hello (PIN / Biometrics) is active for the current user.
+        Works without administrator privileges using read-only HKLM registry keys.
+        Returns (is_active: bool, display_status: str).
+        """
+        try:
+            import win32api
+            import win32con
+
+            tok = win32security.OpenProcessToken(
+                win32api.GetCurrentProcess(),
+                win32con.TOKEN_QUERY,
+            )
+            try:
+                user_sid = win32security.ConvertSidToStringSid(
+                    win32security.GetTokenInformation(tok, win32security.TokenUser)[0]
+                )
+            finally:
+                try:
+                    win32api.CloseHandle(tok)
+                except Exception:
+                    pass
+
+            if not user_sid:
+                return False, "Unknown"
+
+            factors = []
+
+            # --- Windows Hello PIN (NGC Credential Provider / LogonUI NgcPin) ---
+            pin_active = False
+            try:
+                ngc_key_path = (
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication"
+                    rf"\Credential Providers\{{D6886603-9D2F-4EB2-B667-1971041FA96B}}\{user_sid}"
+                )
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    ngc_key_path,
+                    0,
+                    winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                ) as k:
+                    val, _ = winreg.QueryValueEx(k, "LogonCredsAvailable")
+                    if int(val) == 1:
+                        pin_active = True
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                pass
+
+            if not pin_active:
+                try:
+                    pin_cred_path = (
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication"
+                        rf"\LogonUI\NgcPin\Credentials\{user_sid}"
+                    )
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        pin_cred_path,
+                        0,
+                        winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                    ) as k:
+                        val, _ = winreg.QueryValueEx(k, "EncryptedPassword")
+                        if val:
+                            pin_active = True
+                except (FileNotFoundError, OSError, ValueError, TypeError):
+                    pass
+
+            if pin_active:
+                factors.append("PIN")
+
+            # --- Windows Hello Biometrics (WinBio EnrolledFactors bitmask) ---
+            try:
+                bio_key_path = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\WinBio\AccountInfo\{user_sid}"
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    bio_key_path,
+                    0,
+                    winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                ) as k:
+                    val, _ = winreg.QueryValueEx(k, "EnrolledFactors")
+                    mask = int(val)
+                    if mask > 0:
+                        bio_found = False
+                        if mask & 0x02:
+                            factors.append("Face")
+                            bio_found = True
+                        if mask & 0x08:
+                            factors.append("Fingerprint")
+                            bio_found = True
+                        if mask & 0x10:
+                            factors.append("Iris")
+                            bio_found = True
+                        if not bio_found:
+                            factors.append("Biometrics")
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                pass
+
+            if factors:
+                return True, f"Enabled ({', '.join(factors)})"
+            return False, "Not Configured"
+        except Exception:
+            return False, "Unknown"
+
     # --- Main password policy checker ---
-    def get_password_policy_nonadmin(self):
+    def get_password_policy_nonadmin(self, use_cache=True):
         """
         Retrieve password policy information without requiring
         administrator privileges.
@@ -4900,7 +5842,8 @@ class PasswordPolicy:
         global single_check
 
         if (
-            _password_policy_cache is not None
+            use_cache
+            and _password_policy_cache is not None
             and not run_all_clicked
             and not single_check
         ):
@@ -4917,6 +5860,7 @@ class PasswordPolicy:
             "Lockout Duration": "Unknown",
             "Lockout Observed": "Unknown",
             "LAPS": "Unknown",
+            "Windows Hello / PIN": "Unknown",
             "Verdict": "Unknown",
         }
 
@@ -5087,6 +6031,9 @@ class PasswordPolicy:
             except Exception:
                 pass
 
+        # --- Windows Hello / PIN ---
+        hello_active, result["Windows Hello / PIN"] = self._check_windows_hello_pin()
+
         # --- Verdict ---
         min_length = result["Password MinLength"]
         complexity = result["Password Complexity"]
@@ -5094,16 +6041,17 @@ class PasswordPolicy:
         lockout = result["Lockout Observed"]
 
         if required == "No":
+            # Keep blank-password accounts Weak even if Windows Hello / PIN is set
             result["Verdict"] = "Weak"
         elif required == "Yes":
             if min_length is None or min_length < 0:
                 result["Verdict"] = "Unknown"
             elif min_length < 8:
-                result["Verdict"] = "Weak"
+                result["Verdict"] = "Moderate" if hello_active else "Weak"
             elif complexity is False:
-                result["Verdict"] = "Weak"
+                result["Verdict"] = "Moderate" if hello_active else "Weak"
             elif complexity == "Unknown":
-                result["Verdict"] = "Moderate" if lockout == "Yes" else "Unknown"
+                result["Verdict"] = "Moderate" if (lockout == "Yes" or hello_active) else "Unknown"
             elif complexity is True:
                 if lockout == "Yes":
                     result["Verdict"] = "Strong"
@@ -5114,8 +6062,100 @@ class PasswordPolicy:
         else:
             result["Verdict"] = "Unknown"
 
-        _password_policy_cache = result
-        return _password_policy_cache
+        if use_cache:
+            _password_policy_cache = result
+        return result
+
+    @staticmethod
+    def _format_illustration(policy):
+        """Build a compact monospace sign-in flow diagram describing the password policy state."""
+        if not isinstance(policy, dict):
+            policy = {}
+
+        raw_aff = str(policy.get("Policy Affiliation") or "Local").strip() or "Local"
+        target = raw_aff if len(raw_aff) <= 24 else raw_aff[:21].rstrip() + "..."
+
+        min_len = policy.get("Password MinLength")
+        has_min_len = isinstance(min_len, int) and min_len >= 0
+        min_len_str = str(min_len) if has_min_len else "Unknown"
+
+        comp = policy.get("Password Complexity")
+        comp_str = "On" if comp is True else ("Off" if comp is False else "Unknown")
+
+        req = str(policy.get("Password Required") or "Unknown")
+        lockout = str(policy.get("Lockout Observed") or "Unknown")
+        lock_str = "Active" if lockout == "Yes" else ("Off" if lockout == "No" else "Unknown")
+
+        hello_raw = str(policy.get("Windows Hello / PIN") or "Unknown")
+        hello_active = hello_raw.startswith(("Enabled", "Active"))
+        hello_str = "Active" if hello_active else ("Off" if hello_raw == "Not Configured" else "Unknown")
+
+        laps = str(policy.get("LAPS") or "Unknown")
+        verdict = str(policy.get("Verdict") or "Unknown").strip()
+
+        pad = " " * 19
+        lines = ["Illustration:"]
+
+        if verdict == "Strong":
+            lines.append(f"  [ User Sign-In ] ===( Strong Policy )===> [ {target} ]")
+            lines.append(f"{pad}├─ Password: >= {min_len_str} chars | Complexity: {comp_str}")
+            lines.append(f"{pad}└─ Lockout: {lock_str} | Hello/PIN: {hello_str} | LAPS: {laps}")
+        elif verdict == "Moderate":
+            weak_baseline = (has_min_len and min_len < 8) or (comp is False)
+            mitigated_by_hello = hello_active and (
+                weak_baseline or (comp == "Unknown" and lockout != "Yes")
+            )
+            if mitigated_by_hello:
+                lines.append(f"  [ User Sign-In ] ---( Hello / PIN )---> [ {target} ]")
+                if weak_baseline:
+                    lines.append(
+                        f"{pad}├─ Password: Required (MinLen: {min_len_str}, Weak baseline)"
+                    )
+                else:
+                    lines.append(
+                        f"{pad}├─ Password: >= {min_len_str} chars | Complexity: {comp_str}"
+                    )
+                lines.append(
+                    f"{pad}└─ Mitigated by Windows Hello / PIN | Lockout: {lock_str}"
+                )
+            else:
+                lines.append(f"  [ User Sign-In ] ---( Moderate Policy )---> [ {target} ]")
+                lines.append(f"{pad}├─ Password: >= {min_len_str} chars | Complexity: {comp_str}")
+                lines.append(f"{pad}└─ Lockout: {lock_str} | Hello/PIN: {hello_str} | LAPS: {laps}")
+        elif verdict == "Weak":
+            if hello_active:
+                lines.append(f"  [ User Sign-In ] --! ( Hello/PIN ) !--> [ {target} ]")
+                if req == "No":
+                    lines.append(
+                        f"{pad}├─ Password: Not Required (blank password allowed) – Weak Policy"
+                    )
+                    lines.append(
+                        f"{pad}└─ Alert: High risk | Hello/PIN: {hello_str} | Lockout: {lock_str}"
+                    )
+                else:
+                    lines.append(
+                        f"{pad}├─ Password: Required (MinLen: {min_len_str} | Complexity: {comp_str}) – Weak Policy"
+                    )
+                    lines.append(
+                        f"{pad}└─ Alert: Weak baseline | Hello/PIN: {hello_str} | Lockout: {lock_str}"
+                    )
+            else:
+                lines.append(f"  [ User Sign-In ] --! ( Weak Policy ) !--> [ {target} ]")
+                if req == "No":
+                    lines.append(f"{pad}├─ Password: Not Required (blank password allowed)")
+                    lines.append(
+                        f"{pad}└─ Alert: High risk | Hello/PIN: {hello_str} | Lockout: {lock_str}"
+                    )
+                else:
+                    lines.append(
+                        f"{pad}├─ Password: Required (MinLen: {min_len_str} | Complexity: {comp_str})"
+                    )
+                    lines.append(f"{pad}└─ Alert: Weak baseline | Hello/PIN: {hello_str} | Lockout: {lock_str}")
+        else:
+            lines.append(f"  [ User Sign-In ] --? ( Unverified Policy ) ?--> [ {target} ]")
+            lines.append(f"{pad}└─ Policy attributes unavailable (non-admin / unreadable)")
+
+        return "\n".join(lines)
 
     def format_password_policy(self, policy):
         """
@@ -5169,77 +6209,94 @@ class CredentialIntegrity:
 
     # --- Hive Access Check ---
     def check_hive_access(self):
+        sys_root = os.environ.get("SystemRoot", r"C:\Windows")
         paths = [
-            r"C:\Windows\System32\config\SAM",
-            r"C:\Windows\System32\config\SECURITY"
+            os.path.join(sys_root, "System32", "config", "SAM"),
+            os.path.join(sys_root, "System32", "config", "SECURITY"),
         ]
+
+        # Allowed privileged SIDs: SYSTEM, Builtin Administrators, TrustedInstaller
+        allowed_sids = {
+            "S-1-5-18",
+            "S-1-5-32-544",
+            "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+        }
+        risky_sids = {
+            "S-1-1-0",       # Everyone
+            "S-1-5-32-545",  # BUILTIN\Users
+            "S-1-5-11",      # Authenticated Users
+            "S-1-5-7",       # Anonymous Logon
+        }
+        allow_types = {win32security.ACCESS_ALLOWED_ACE_TYPE}
+        deny_types = {win32security.ACCESS_DENIED_ACE_TYPE}
+        object_types = set()
+        if hasattr(win32security, "ACCESS_ALLOWED_OBJECT_ACE_TYPE"):
+            allow_types.add(win32security.ACCESS_ALLOWED_OBJECT_ACE_TYPE)
+            object_types.add(win32security.ACCESS_ALLOWED_OBJECT_ACE_TYPE)
+        if hasattr(win32security, "ACCESS_DENIED_OBJECT_ACE_TYPE"):
+            deny_types.add(win32security.ACCESS_DENIED_OBJECT_ACE_TYPE)
+            object_types.add(win32security.ACCESS_DENIED_OBJECT_ACE_TYPE)
+        inherit_only_flag = getattr(win32security, "INHERIT_ONLY_ACE", 0x8)
 
         results = []
         admin = is_admin()
 
         for path in paths:
-
-            # --- NON-ADMIN: try real access ---
-            if not admin:
-                try:
-                    with open(path, "rb"):
-                        status = "Accessible ⚠️"
-                except PermissionError:
-                    status = "Protected (SYSTEM only)"
-                except Exception:
-                    status = "Unknown"
-
-                results.append(f"{path}\n    {status}")
-                continue
-
-            # --- ADMIN: full ACL check ---
             try:
-                output = subprocess.check_output(
-                    [_system_exe("icacls"), path],
-                    shell=False,
-                    text=True,
-                    errors="ignore",
-                    env=_safe_subproc_env(),
-                    creationflags=_CREATE_NO_WINDOW,
-                    startupinfo=_STARTUPINFO,
+                sd = win32security.GetFileSecurity(
+                    path, win32security.DACL_SECURITY_INFORMATION
                 )
-
-                ace_entries = []
-                for raw_line in output.splitlines():
-                    line = raw_line.strip()
-                    if not line or line.lower().startswith("successfully processed"):
-                        continue
-                    if line.lower().startswith(path.lower()):
-                        line = line[len(path):].strip()
-                    if ":" in line:
-                        principal = line.split(":", 1)[0].strip().upper()
-                        perms = line.split(":", 1)[1].strip().upper()
-                        ace_entries.append((principal, perms))
-
-                risky_principals = ("EVERYONE", "BUILTIN\\USERS", "USERS", "AUTHENTICATED USERS", "NT AUTHORITY\\AUTHENTICATED USERS")
-                overly_permissive = any(
-                    (p in risky_principals or p.endswith("\\USERS")) and "(DENY)" not in perms
-                    for p, perms in ace_entries
-                )
-                has_system = any(p == "NT AUTHORITY\\SYSTEM" for p, _ in ace_entries)
-                unexpected_principals = any(
-                    p not in ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS")
-                    and not p.endswith("\\ADMINISTRATORS")
-                    for p, perms in ace_entries
-                    if "(DENY)" not in perms
-                )
-
-                if overly_permissive or unexpected_principals:
+                dacl = sd.GetSecurityDescriptorDacl()
+                if dacl is None:
                     status = "Accessible ⚠️"
-                elif has_system:
+                else:
+                    denied_sids = set()
+                    has_system = False
+                    overly_permissive = False
+                    unexpected_principals = False
+
+                    for i in range(dacl.GetAceCount()):
+                        try:
+                            ace = dacl.GetAce(i)
+                            ace_type, ace_flags = ace[0]
+                            if ace_flags & inherit_only_flag:
+                                continue
+                            sid = ace[4] if (ace_type in object_types and len(ace) >= 5) else ace[2]
+                            sid_str = win32security.ConvertSidToStringSid(sid)
+                        except (TypeError, IndexError, win32security.error):
+                            continue
+
+                        if ace_type in deny_types:
+                            denied_sids.add(sid_str)
+                            continue
+                        if ace_type not in allow_types:
+                            continue
+                        if sid_str in denied_sids:
+                            continue
+
+                        if sid_str == "S-1-5-18":
+                            has_system = True
+                        elif sid_str in risky_sids:
+                            overly_permissive = True
+                        elif sid_str not in allowed_sids:
+                            unexpected_principals = True
+
+                    if overly_permissive or unexpected_principals:
+                        status = "Accessible ⚠️"
+                    elif has_system:
+                        status = "Protected (SYSTEM only)"
+                    else:
+                        status = "Unknown"
+            except win32security.error as we:
+                # Non-admin ERROR_ACCESS_DENIED (5) reading DACL confirms hive ACL is locked down
+                if not admin and getattr(we, "winerror", None) == 5:
                     status = "Protected (SYSTEM only)"
                 else:
                     status = "Unknown"
-
-                results.append(f"{path}\n    {status}")
-
             except Exception:
-                results.append(f"{path}\n    Unknown")
+                status = "Unknown"
+
+            results.append(f"{path}\n    {status}")
 
         return "\n  ".join(results)
 
@@ -5269,6 +6326,126 @@ class CredentialIntegrity:
 
         except Exception:
             return "Unknown"
+
+    # --- Cached Credentials (Policy + Kerberos + Windows Vault) ---
+    @staticmethod
+    def _run_hidden_cmd_timed(cmd_list, timeout=5):
+        """Run a system binary hidden with a hard timeout; return (returncode, stdout) or (None, '')."""
+        try:
+            resolved_cmd = [_system_exe(str(cmd_list[0])), *cmd_list[1:]] if cmd_list else cmd_list
+            res = subprocess.run(
+                resolved_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_safe_subproc_env(),
+                creationflags=_CREATE_NO_WINDOW,
+                startupinfo=_STARTUPINFO,
+            )
+            return res.returncode, res.stdout or ""
+        except Exception:
+            return None, ""
+
+    def check_cached_credentials(self):
+        """
+        Read-only, non-admin check for cached credential indicators:
+        - Domain Logon Cache Policy (Winlogon\\CachedLogonsCount)
+        - Kerberos Ticket Cache (klist)
+        - Windows Vault (vaultcmd /listcreds for Windows & Web Credentials)
+        Never accesses or exposes credential secrets or SYSTEM-only SECURITY\\Cache hashes.
+        """
+        # 1) Domain Logon Cache Policy (CachedLogonsCount)
+        host_scope = ""
+        try:
+            dom = get_domain_settings()
+            if isinstance(dom, dict):
+                dtype = str(dom.get("Type") or "").strip()
+                if dtype == "Workgroup":
+                    host_scope = "Workgroup host"
+                elif dtype in ("Domain", "Hybrid Azure AD"):
+                    host_scope = "Domain host"
+                elif dtype == "Azure AD":
+                    host_scope = "Entra ID host"
+        except Exception:
+            pass
+
+        policy_status = "Unknown"
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                0,
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ) as k:
+                raw_val, _ = winreg.QueryValueEx(k, "CachedLogonsCount")
+            count = int(str(raw_val).strip())
+            if count <= 0:
+                policy_status = f"Disabled (0 allowed{f'; {host_scope}' if host_scope else ''})"
+            else:
+                policy_status = f"Enabled ({count} allowed{f'; {host_scope}' if host_scope else ''})"
+        except FileNotFoundError:
+            policy_status = f"Enabled (10 default{f'; {host_scope}' if host_scope else ''})"
+        except (OSError, ValueError, TypeError):
+            policy_status = "Unknown"
+
+        # 2) Run klist + vaultcmd concurrently so non-domain hosts stay responsive
+        def _query_klist():
+            rc, out = self._run_hidden_cmd_timed(["klist"], timeout=5)
+            if rc != 0 and not out:
+                return "Unknown"
+            m = re.search(r"Cached Tickets:\s*\((\d+)\)", out, re.IGNORECASE)
+            if m:
+                cnt = int(m.group(1))
+            else:
+                cnt = len(re.findall(r"(?m)^\s*#\d+>", out))
+                if cnt == 0 and rc != 0:
+                    return "Unknown"
+            if cnt > 0:
+                return f"Present ({cnt} ticket{'s' if cnt != 1 else ''})"
+            return "Not present (0 tickets)"
+
+        def _query_vault(vault_name):
+            rc, out = self._run_hidden_cmd_timed(["vaultcmd", f"/listcreds:{vault_name}"], timeout=5)
+            if rc != 0:
+                return None
+            return len(re.findall(r"(?m)^\s*Resource:", out))
+
+        kerberos_status = "Unknown"
+        vault_status = "Unknown"
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                f_klist = ex.submit(_query_klist)
+                f_win_vault = ex.submit(_query_vault, "Windows Credentials")
+                f_web_vault = ex.submit(_query_vault, "Web Credentials")
+
+                kerberos_status = f_klist.result(timeout=6)
+                win_cnt = f_win_vault.result(timeout=6)
+                web_cnt = f_web_vault.result(timeout=6)
+
+            if win_cnt is None and web_cnt is None:
+                vault_status = "Unknown"
+            else:
+                w_n = win_cnt or 0
+                b_n = web_cnt or 0
+                total = w_n + b_n
+                if total > 0:
+                    parts = []
+                    if w_n > 0:
+                        parts.append(f"{w_n} Windows")
+                    if b_n > 0:
+                        parts.append(f"{b_n} Web")
+                    detail = f": {', '.join(parts)}" if parts else ""
+                    vault_status = f"Present ({total} entr{'y' if total == 1 else 'ies'}{detail})"
+                else:
+                    vault_status = "Not present (0 entries)"
+        except Exception:
+            pass
+
+        return {
+            "Domain Logon Cache Policy": policy_status,
+            "Kerberos Ticket Cache": kerberos_status,
+            "Windows Vault": vault_status,
+        }
 
     # --- Credential Guard ---
     def check_credential_guard(self):
@@ -5442,9 +6619,19 @@ class CredentialIntegrity:
         lsass_protection_status = self.check_lsass_protection()
         lsass_signature_status = self.check_lsass_signature()
         credential_manager_status = self.check_credential_manager()
+        cached_credentials_status = self.check_cached_credentials()
 
         report = [""]
 
+        # Cached Credentials
+        report.append("Cached Credentials:")
+        if isinstance(cached_credentials_status, dict):
+            for k, v in cached_credentials_status.items():
+                report.append(f"  {k}: {v}")
+        else:
+            report.append(f"  {cached_credentials_status}")
+        report.append("–" * 50)
+        
         # Credential Guard
         report.append("Credential Guard:")
         report.append(f"  {credential_guard_status}")
@@ -5616,63 +6803,182 @@ class WindowsEvents:
         2004: "Resource exhaustion detected (low memory)",
     }
 
-    @staticmethod
-    def _get_event_counts(log_name, event_map, heading, report_widget=None):
-        """Query event counts for the last 24 hours for the given Windows log."""
-        result = {"Last 24 Hours": []}
+    _SECURITY_CATEGORIES = {
+        1102: ("Audit / Tampering", 0),
+        4614: ("Audit / Tampering", 0),
+        4713: ("Audit / Tampering", 0),
+        4670: ("Policy & Privilege", 1),
+        4719: ("Policy & Privilege", 1),
+        4739: ("Policy & Privilege", 1),
+        4782: ("Policy & Privilege", 1),
+        4697: ("Persistence", 2),
+        4698: ("Persistence", 2),
+        4699: ("Persistence", 2),
+        4700: ("Persistence", 2),
+        4701: ("Persistence", 2),
+        4720: ("Account Mgmt", 3),
+        4722: ("Account Mgmt", 3),
+        4725: ("Account Mgmt", 3),
+        4726: ("Account Mgmt", 3),
+        4738: ("Account Mgmt", 3),
+        4740: ("Account Mgmt", 3),
+        4727: ("Group Changes", 4),
+        4728: ("Group Changes", 4),
+        4729: ("Group Changes", 4),
+        4730: ("Group Changes", 4),
+        4731: ("Group Changes", 4),
+        4732: ("Group Changes", 4),
+        4733: ("Group Changes", 4),
+        4734: ("Group Changes", 4),
+        4756: ("Group Changes", 4),
+        4757: ("Group Changes", 4),
+        4758: ("Group Changes", 4),
+        4759: ("Group Changes", 4),
+        4625: ("Logon / Auth", 5),
+        4648: ("Logon / Auth", 5),
+        4672: ("Logon / Auth", 5),
+        4624: ("Logon / Auth", 5),
+        4634: ("Logon / Auth", 5),
+        4647: ("Logon / Auth", 5),
+    }
+
+    _SYSTEM_CATEGORIES = {
+        41: ("System Stability", 0),
+        55: ("System Stability", 0),
+        98: ("System Stability", 0),
+        1001: ("System Stability", 0),
+        1014: ("System Stability", 0),
+        6008: ("System Stability", 0),
+        7: ("Disk & Storage", 1),
+        11: ("Disk & Storage", 1),
+        15: ("Disk & Storage", 1),
+        50: ("Disk & Storage", 1),
+        51: ("Disk & Storage", 1),
+        57: ("Disk & Storage", 1),
+        129: ("Disk & Storage", 1),
+        140: ("Disk & Storage", 1),
+        153: ("Disk & Storage", 1),
+        157: ("Disk & Storage", 1),
+        161: ("Disk & Storage", 1),
+        7000: ("Driver & Service", 2),
+        7001: ("Driver & Service", 2),
+        7009: ("Driver & Service", 2),
+        7011: ("Driver & Service", 2),
+        7022: ("Driver & Service", 2),
+        7023: ("Driver & Service", 2),
+        7024: ("Driver & Service", 2),
+        7026: ("Driver & Service", 2),
+        7031: ("Driver & Service", 2),
+        7034: ("Driver & Service", 2),
+        7036: ("Driver & Service", 2),
+        20001: ("Driver & Service", 2),
+        20003: ("Driver & Service", 2),
+        1500: ("Profile & Registry", 3),
+        1501: ("Profile & Registry", 3),
+        1508: ("Profile & Registry", 3),
+        1511: ("Profile & Registry", 3),
+        2004: ("Resources", 4),
+        4201: ("Network", 5),
+        4202: ("Network", 5),
+        19: ("Windows Update", 6),
+        20: ("Windows Update", 6),
+        21: ("Windows Update", 6),
+        1: ("Boot & Power", 7),
+        12: ("Boot & Power", 7),
+        13: ("Boot & Power", 7),
+        18: ("Boot & Power", 7),
+        27: ("Boot & Power", 7),
+        42: ("Boot & Power", 7),
+        6005: ("Boot & Power", 7),
+        6006: ("Boot & Power", 7),
+        35: ("Time Service", 8),
+        36: ("Time Service", 8),
+        37: ("Time Service", 8),
+    }
+
+    @classmethod
+    def _get_event_counts(cls, log_name, event_map, heading, category_map=None, report_widget=None):
+        """Query 24-hour event counts in batched 15-ID wevtutil XML queries."""
+        result = {"Last 24 Hours": [], "LogName": log_name, "TotalMonitored": len(event_map)}
 
         def _append_widget(text):
             if report_widget:
-                report_widget.config(state="normal")
-                report_widget.insert("end", text)
-                report_widget.see("end")
-                report_widget.config(state="disabled")
+                def _do_append():
+                    try:
+                        if report_widget.winfo_exists():
+                            report_widget.config(state="normal")
+                            report_widget.insert("end", text)
+                            report_widget.see("end")
+                            report_widget.config(state="disabled")
+                    except Exception:
+                        pass
+                try:
+                    report_widget.after(0, _do_append)
+                except Exception:
+                    pass
 
         try:
-            events = []
+            counts = {int(eid): 0 for eid in event_map.keys()}
+            event_ids = list(counts.keys())
+            chunk_size = 15
 
-            for event_id, desc in event_map.items():
+            for start in range(0, len(event_ids), chunk_size):
+                chunk = event_ids[start: start + chunk_size]
+                cond = " or ".join(f"EventID={eid}" for eid in chunk)
+                query = f"/q:*[System[({cond}) and TimeCreated[timediff(@SystemTime) <= 86400000]]]"
                 cmd = [
                     _system_exe("wevtutil"),
                     "qe",
                     log_name,
-                    f"/q:*[System[(EventID={int(event_id)}) and TimeCreated[timediff(@SystemTime) <= 86400000]]]",
-                    "/f:text",
+                    query,
+                    "/f:xml",
                 ]
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=15,
+                    env=_safe_subproc_env(),
+                    creationflags=_CREATE_NO_WINDOW,
+                    startupinfo=_STARTUPINFO,
+                )
+                if proc.returncode != 0:
+                    err_l = (proc.stderr or "").lower()
+                    if proc.returncode == 5 or "access is denied" in err_l:
+                        _append_widget("  Access denied\n")
+                        return None
+                    continue
 
-                try:
-                    output = subprocess.check_output(
-                        cmd,
-                        shell=False,
-                        text=True,
-                        env=_safe_subproc_env(),
-                        creationflags=_CREATE_NO_WINDOW,
-                        startupinfo=_STARTUPINFO,
-                    ).strip()
+                if proc.stdout:
+                    for raw_eid in re.findall(r"<EventID[^>]*>(\d+)</EventID>", proc.stdout):
+                        eid = int(raw_eid)
+                        if eid in counts:
+                            counts[eid] += 1
 
-                    count = sum(1 for line in output.splitlines() if line.startswith("Event[")) if output else 0
-                    events.append({
-                        "Event ID": event_id,
-                        "Description": desc,
-                        "Count": count
-                    })
-
-                except subprocess.CalledProcessError:
-                    _append_widget("  Access denied\n")
-                    return None
+            cat_lookup = category_map or {}
+            events = []
+            for event_id, desc in event_map.items():
+                eid = int(event_id)
+                cat_name, cat_prio = cat_lookup.get(eid, ("General", 9))
+                events.append({
+                    "Event ID": eid,
+                    "Description": desc,
+                    "Category": cat_name,
+                    "Priority": cat_prio,
+                    "Count": counts.get(eid, 0),
+                })
 
             result["Last 24 Hours"] = events
 
             if report_widget:
-                report_widget.config(state="normal")
-                report_widget.insert("end", heading)
-                for event in events:
-                    report_widget.insert(
-                        "end",
-                        f"  {event['Description']} ({event['Event ID']}): {event['Count']}\n"
-                    )
-                report_widget.see("end")
-                report_widget.config(state="disabled")
+                active = [e for e in events if e["Count"] > 0]
+                block = heading + "".join(
+                    f"  {e['Description']} ({e['Event ID']}): {e['Count']}\n"
+                    for e in active
+                )
+                _append_widget(block)
 
         except Exception:
             result["Last 24 Hours"] = "Access denied"
@@ -5682,41 +6988,102 @@ class WindowsEvents:
 
     @staticmethod
     def _format_events(data):
-        """Formats the event counts as a clean table."""
-        lines = ["", "–" * 80, "Last 24 Hours:", "–" * 80]
+        """Format 24-hour event counts as an Option A wide 98-char table (active events + summary)."""
+        w_desc, w_id, w_cat, w_cnt = 44, 10, 22, 10
+        gap = "    "
+        total_w = w_desc + len(gap) + w_id + len(gap) + w_cat + len(gap) + w_cnt  # 98 chars
+        sep = " " + ("–" * total_w)
+
+        def _clip(text, width):
+            s = str(text or "").strip()
+            return s if len(s) <= width else s[: max(1, width - 3)].rstrip() + "..."
 
         events = data.get("Last 24 Hours", [])
+        log_name = str(data.get("LogName") or "Event Log")
 
         if isinstance(events, str):
-            lines.append(f"    {events}")
-        elif events:
-            lines.append(
-                f"    {'Event Description':<45}"
-                f"{'Event ID':>14}"
-                f"{'Cases':>14}"
-            )
-            lines.append("    " + "–" * 76)
+            if log_name.lower() == "security":
+                return "\n".join([
+                    "",
+                    " Last 24 Hours  |  Status: Administrator Required",
+                    sep,
+                    "   Windows Security Event Log (Security.evtx) is restricted by the OS.",
+                    "   └─ Run Secuditor Lite as Administrator, or add your account to the",
+                    "      local \"Event Log Readers\" group to audit Security Events.",
+                ])
+            return "\n".join([
+                "",
+                f" Last 24 Hours  |  Status: {events}",
+                sep,
+                f"   Unable to query {log_name} event log ({events}).",
+            ])
 
-            for event in events:
-                lines.append(
-                    f"    {event['Description']:<45}"
-                    f"{event['Event ID']:>14}"
-                    f"{event['Count']:>14}"
-                )
-        else:
-            lines.append("    None Detected")
+        total_monitored = int(data.get("TotalMonitored") or len(events))
+        active_events = [e for e in events if int(e.get("Count") or 0) > 0]
+        zero_events = [e for e in events if int(e.get("Count") or 0) <= 0]
+        active_events.sort(
+            key=lambda e: (int(e.get("Priority", 9)), -int(e.get("Count") or 0), int(e.get("Event ID") or 0))
+        )
+        zero_events.sort(
+            key=lambda e: (int(e.get("Priority", 9)), int(e.get("Event ID") or 0))
+        )
+        total_cases = sum(int(e.get("Count") or 0) for e in active_events)
+
+        lines = [
+            "",
+            f" Last 24 Hours  |  Total Events: {total_cases}  |  Active Event Types: {len(active_events)} of {total_monitored}",
+            sep,
+        ]
+
+        if not events:
+            lines.append("   No monitored events configured.")
+            return "\n".join(lines)
+
+        lines.append(
+            f" {'Event Description':<{w_desc}}{gap}"
+            f"{'Event ID':>{w_id}}{gap}"
+            f"{'Category':<{w_cat}}{gap}"
+            f"{'Cases':>{w_cnt}}"
+        )
+        lines.append(sep)
+
+        def _append_row(e):
+            desc = _clip(e.get("Description", ""), w_desc)
+            cat = _clip(e.get("Category", "General"), w_cat)
+            eid = int(e.get("Event ID") or 0)
+            cnt = int(e.get("Count") or 0)
+            lines.append(
+                f" {desc:<{w_desc}}{gap}"
+                f"{eid:>{w_id}}{gap}"
+                f"{cat:<{w_cat}}{gap}"
+                f"{cnt:>{w_cnt}}"
+            )
+
+        for e in active_events:
+            _append_row(e)
+
+        if active_events and zero_events:
+            lines.append(sep)
+
+        for e in zero_events:
+            _append_row(e)
 
         return "\n".join(lines)
 
-    def _collect_and_format(self, log_name, event_map, heading, report_widget=None):
+    def _collect_and_format(self, log_name, event_map, heading, category_map=None, report_widget=None):
         result = self._get_event_counts(
             log_name,
             event_map,
             heading,
+            category_map=category_map,
             report_widget=report_widget,
         )
         if result is None:
-            return {"Last 24 Hours": "Access denied"}
+            return self._format_events({
+                "Last 24 Hours": "Access denied",
+                "LogName": log_name,
+                "TotalMonitored": len(event_map),
+            })
         return self._format_events(result)
 
     def get_security_events(self, report_widget=None):
@@ -5728,6 +7095,7 @@ class WindowsEvents:
             "Security",
             self.SECURITY_EVENTS,
             "  Security Events — Last 24 Hours\n\n",
+            category_map=self._SECURITY_CATEGORIES,
             report_widget=report_widget,
         )
 
@@ -5740,6 +7108,7 @@ class WindowsEvents:
             "System",
             self.SYSTEM_EVENTS,
             "  System Events — Last 24 Hours\n\n",
+            category_map=self._SYSTEM_CATEGORIES,
             report_widget=report_widget,
         )
 
@@ -5758,10 +7127,27 @@ class WindowsUpdates:
     }
 
     WIN10_RELEASES = {
+        10240: "1507",
+        10586: "1511",
+        14393: "1607",
+        15063: "1703",
+        16299: "1709",
+        17134: "1803",
+        17763: "1809",
+        18362: "1903",
+        18363: "1909",
+        19041: "2004",
         19042: "20H2",
         19043: "21H1",
         19044: "21H2",
         19045: "22H2",
+    }
+
+    SERVER_RELEASES = {
+        14393: "1607",
+        17763: "1809",
+        20348: "21H2",
+        26100: "24H2",
     }
 
     RELEASE_DATES = {
@@ -5811,6 +7197,7 @@ class WindowsUpdates:
         (
             "https://learn.microsoft.com/en-us/windows/release-health/release-information",
             {
+                "Windows 10 21H2": r"\b19044\.\d{1,6}\b",
                 "Windows 10 22H2": r"\b19045\.\d{1,6}\b",
             },
         ),
@@ -5913,8 +7300,8 @@ class WindowsUpdates:
         server_key = cls.SERVER_BUILD_KEYS.get(os_name)
         return builds.get(server_key) if server_key else None
 
-    @staticmethod
-    def _determine_status(local_build, local_ubr, latest_build):
+    @classmethod
+    def _determine_status(cls, local_build, local_ubr, latest_build, os_name=None):
         if not latest_build:
             # Local information is still valid; only the online comparison failed.
             return "Unable to check online"
@@ -5922,12 +7309,23 @@ class WindowsUpdates:
         try:
             latest_base, latest_ubr = [int(x) for x in latest_build.split(".")]
 
-            # Different base build = different release/build
-            if local_build < latest_base:
-                return "Outdated"
-            if local_build > latest_base:
-                # Local build newer than the currently known Microsoft build.
+            if local_build != latest_base:
+                # Compare release chronology first when both builds map to known releases
+                # (handles Win11 26H1=28000 Feb 2026 vs 26H2=26300 Sept 2026)
+                if os_name in ("Windows 11", "Windows 10"):
+                    rel_map = cls.WIN11_RELEASES if os_name == "Windows 11" else cls.WIN10_RELEASES
+                    local_rel = rel_map.get(local_build)
+                    latest_rel = rel_map.get(latest_base)
+                    if local_rel and latest_rel:
+                        local_dt = cls._parse_release_date(os_name, local_rel)
+                        latest_dt = cls._parse_release_date(os_name, latest_rel)
+                        if local_dt != datetime.min and latest_dt != datetime.min and local_dt != latest_dt:
+                            return "Outdated" if local_dt < latest_dt else "Updated"
+
+                if local_build < latest_base:
+                    return "Outdated"
                 return "Updated"
+
             # Same base build -- compare revision.
             return "Outdated" if local_ubr < latest_ubr else "Updated"
 
@@ -5981,11 +7379,13 @@ class WindowsUpdates:
             release = self.get_windows_11_release(local_build)
         elif os_name == "Windows 10":
             release = self.get_windows_10_release(local_build)
+        elif os_name and os_name.startswith("Windows Server"):
+            release = self.SERVER_RELEASES.get(local_build)
 
         # Fetch Microsoft information
         builds = self.fetch_latest_builds()
         latest_build = self._select_latest_build(os_name, builds, release=release or display_version)
-        status = self._determine_status(local_build, local_ubr, latest_build)
+        status = self._determine_status(local_build, local_ubr, latest_build, os_name=os_name)
 
         # Combine OS and edition into one row
         os_edition = f"{os_name} {edition}" if edition else os_name
@@ -6012,27 +7412,44 @@ class WindowsUpdates:
     def get_windows_updates():
         """Get installed Windows updates."""
         installed_updates = []
+        com_initialized = False
+
+        def _collect_updates():
+            import win32com.client
+            collected = []
+            svc = win32com.client.GetObject(r"winmgmts:\\.\root\cimv2")
+            for hotfix in svc.ExecQuery("SELECT HotFixID, InstalledOn FROM Win32_QuickFixEngineering"):
+                hotfix_id = str(getattr(hotfix, "HotFixID", "") or "")
+                installed_on = str(getattr(hotfix, "InstalledOn", "") or "") or "Unknown"
+                if hotfix_id:
+                    collected.append(f"{hotfix_id} {installed_on}")
+            return collected
 
         try:
-            pythoncom.CoInitialize()
-        except Exception:
-            pass
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            except pythoncom.com_error as ce:
+                # RPC_E_CHANGED_MODE: thread already initialized with another apartment model
+                if ce.hresult != -2147417850:
+                    raise
 
-        try:
-            c = wmi.WMI()
-
-            for hotfix in c.Win32_QuickFixEngineering():
-                installed_on = hotfix.InstalledOn if hotfix.InstalledOn else "Unknown"
-                installed_updates.append(f"{hotfix.HotFixID} {installed_on}")
+            installed_updates = _collect_updates()
 
         except Exception as e:
             installed_updates.append(f"Error retrieving installed updates: {e}")
 
         finally:
             try:
-                pythoncom.CoUninitialize()
+                import gc
+                gc.collect()
             except Exception:
                 pass
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
         return installed_updates
 

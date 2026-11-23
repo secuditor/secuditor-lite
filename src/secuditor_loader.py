@@ -1,5 +1,6 @@
 # Secuditor Database Loader – Copyright (c) 2026 Menahem Levinski
 
+import contextlib
 import csv
 import hashlib
 import io
@@ -10,7 +11,7 @@ import time
 
 import requests
 
-UPVER = "4.0"
+UPVER = "4.1"
 
 OUI_RESOURCE_URL = "https://updates.secuditor.com/oui-version.json"
 def _resolve_oui_db_path():
@@ -59,9 +60,14 @@ def _read_resource (timeout=4):
 
     response.raise_for_status()
     resource = response.json()
+    if not isinstance(resource, dict):
+        raise ValueError("Invalid OUI resource payload")
 
     version = resource.get("oui_version")
-    expected_hash = resource.get("sha256", "").lower()
+    raw_hash = resource.get("sha256")
+    if not isinstance(raw_hash, str):
+        raise ValueError("Invalid OUI SHA-256 in resource")
+    expected_hash = raw_hash.strip().lower()
     url = resource.get("url")
 
     if not isinstance(version, str) or not version.strip():
@@ -115,10 +121,11 @@ def _parse_csv(content):
 def load_oui_cache():
     """Load the current local vendor mapping. Never requires internet."""
     try:
-        with _connect() as conn:
-            rows = conn.execute(
-                "SELECT mac_prefix, vendor_name FROM oui_vendor"
-            ).fetchall()
+        with contextlib.closing(_connect()) as conn:
+            with conn:
+                rows = conn.execute(
+                    "SELECT mac_prefix, vendor_name FROM oui_vendor"
+                ).fetchall()
         return dict(rows)
     except (sqlite3.Error, OSError):
         return {}
@@ -126,10 +133,11 @@ def load_oui_cache():
 def get_oui_version():
     """Return the cached version, or None if not initialized."""
     try:
-        with _connect() as conn:
-            row = conn.execute(
-                "SELECT value FROM oui_metadata WHERE key = 'version'"
-            ).fetchone()
+        with contextlib.closing(_connect()) as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT value FROM oui_metadata WHERE key = 'version'"
+                ).fetchone()
         return row[0] if row else None
     except (sqlite3.Error, OSError):
         return None
@@ -167,35 +175,36 @@ def update_oui_cache(timeout=8):
 
         records = _parse_csv(content)
 
-        with _connect() as conn:
-            # Both changes commit together. On failure, SQLite rolls back.
-            conn.execute("DELETE FROM oui_vendor")
-            conn.executemany(
-                """
-                INSERT INTO oui_vendor (mac_prefix, vendor_name)
-                VALUES (?, ?)
-                """,
-                records.items(),
-            )
-            conn.execute("""
-                INSERT INTO oui_metadata (key, value)
-                VALUES ('version', ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """, (version,))
-            conn.execute("""
-                INSERT INTO oui_metadata (key, value)
-                VALUES ('sha256', ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """, (actual_hash,))
-            conn.execute("""
-                INSERT INTO oui_metadata (key, value)
-                VALUES ('updated_at', ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """, (str(int(time.time())),))
+        with contextlib.closing(_connect()) as conn:
+            with conn:
+                # Both changes commit together. On failure, SQLite rolls back.
+                conn.execute("DELETE FROM oui_vendor")
+                conn.executemany(
+                    """
+                    INSERT INTO oui_vendor (mac_prefix, vendor_name)
+                    VALUES (?, ?)
+                    """,
+                    records.items(),
+                )
+                conn.execute("""
+                    INSERT INTO oui_metadata (key, value)
+                    VALUES ('version', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, (version,))
+                conn.execute("""
+                    INSERT INTO oui_metadata (key, value)
+                    VALUES ('sha256', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, (actual_hash,))
+                conn.execute("""
+                    INSERT INTO oui_metadata (key, value)
+                    VALUES ('updated_at', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, (str(int(time.time())),))
 
         return True
 
-    except (requests.RequestException, ValueError, UnicodeError,
-            csv.Error, sqlite3.Error, OSError) as exc:
+    except (requests.RequestException, ValueError, TypeError, AttributeError,
+            UnicodeError, csv.Error, sqlite3.Error, OSError) as exc:
         print(f"[!] OUI update failed; retaining local cache: {exc}")
         return False

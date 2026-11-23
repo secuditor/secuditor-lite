@@ -7,7 +7,7 @@
     "iex",
     "invoke-command",
     "add-type",
-    "executionpolicy bypass",
+    "-executionpolicy bypass",
     "-nop",
     "-noprofile",
 
@@ -403,104 +403,104 @@
   ],
 
   "sensitive_path_templates": [
-    "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.mdf",
-    "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.ldf",
-    "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.ndf",
-    "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.bak",
+    "{drive}Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.mdf",
+    "{drive}Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.ldf",
+    "{drive}Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.ndf",
+    "{drive}Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\DATA\\*.bak",
 
-    "C:\\ProgramData\\MySQL\\MySQL Server*\\Data\\*.ibd",
-    "C:\\ProgramData\\MySQL\\MySQL Server*\\Data\\*.err",
-    "C:\\Program Files\\MySQL\\MySQL Server*\\Data\\*",
-    "C:\\xampp\\mysql\\data\\*",
-    "C:\\wamp*\\bin\\mysql\\mysql*\\data\\*",
+    "{drive}ProgramData\\MySQL\\MySQL Server*\\Data\\*.ibd",
+    "{drive}ProgramData\\MySQL\\MySQL Server*\\Data\\*.err",
+    "{drive}Program Files\\MySQL\\MySQL Server*\\Data\\*",
+    "{drive}xampp\\mysql\\data\\*",
+    "{drive}wamp*\\bin\\mysql\\mysql*\\data\\*",
 
-    "C:\\Program Files\\PostgreSQL\\*\\data\\*",
-    "C:\\ProgramData\\PostgreSQL\\*\\data\\*",
+    "{drive}Program Files\\PostgreSQL\\*\\data\\*",
+    "{drive}ProgramData\\PostgreSQL\\*\\data\\*",
 
-    "C:\\Program Files\\MongoDB\\Server\\*\\data\\*",
-    "C:\\data\\db\\*",
+    "{drive}Program Files\\MongoDB\\Server\\*\\data\\*",
+    "{drive}data\\db\\*",
 
-    "C:\\Program Files\\Redis\\*",
-    "C:\\redis\\data\\*",
+    "{drive}Program Files\\Redis\\*",
+    "{drive}redis\\data\\*",
 
-    "C:\\Users\\*\\*.sqlite",
-    "C:\\Users\\*\\*.db",
+    "{drive}Users\\*\\*.sqlite",
+    "{drive}Users\\*\\*.db",
 
-    "C:\\Windows\\NTDS\\NTDS.dit",
-    "C:\\Windows\\NTDS\\*.log",
-    "C:\\Windows\\NTDS\\*.edb",
+    "{sysdrive}Windows\\NTDS\\NTDS.dit",
+    "{sysdrive}Windows\\NTDS\\*.log",
+    "{sysdrive}Windows\\NTDS\\*.edb",
 
-    "C:\\Windows\\SYSVOL",
-    "C:\\Windows\\SYSVOL\\domain\\Policies",
-	"C:\\Windows\\Panther\\Unattend.xml",
-	"C:\\Windows\\Panther\\sysprep.xml",
+    "{sysdrive}Windows\\SYSVOL",
+    "{sysdrive}Windows\\SYSVOL\\domain\\Policies",
+	"{sysdrive}Windows\\Panther\\Unattend.xml",
+	"{sysdrive}Windows\\Panther\\sysprep.xml",
 	
-	"C:\\Users\\*\\AppData\\Roaming\\FileZilla\\sitemanager.xml",
-	"C:\\Users\\*\\AppData\\Roaming\\FileZilla\\recentservers.xml",
+	"{drive}Users\\*\\AppData\\Roaming\\FileZilla\\sitemanager.xml",
+	"{drive}Users\\*\\AppData\\Roaming\\FileZilla\\recentservers.xml",
 
-    "C:\\inetpub\\wwwroot",
-    "C:\\inetpub\\logs\\LogFiles\\*",
+    "{drive}inetpub\\wwwroot",
+    "{drive}inetpub\\logs\\LogFiles\\*",
 
-    "C:\\xampp\\htdocs\\*",
-    "C:\\xampp\\apache\\logs\\*",
-    "C:\\wamp*\\www\\*",
-    "C:\\Program Files\\Apache*\\htdocs\\*",
-    "C:\\nginx\\html\\*",
+    "{drive}xampp\\htdocs\\*",
+    "{drive}xampp\\apache\\logs\\*",
+    "{drive}wamp*\\www\\*",
+    "{drive}Program Files\\Apache*\\htdocs\\*",
+    "{drive}nginx\\html\\*",
 
-    "C:\\Users\\*\\.env",
-    "C:\\Users\\*\\*.env",
-    "C:\\Users\\*\\web.config",
-    "C:\\Users\\*\\appsettings.json",
-    "C:\\Users\\*\\config.php",
+    "{drive}Users\\*\\.env",
+    "{drive}Users\\*\\*.env",
+    "{drive}Users\\*\\web.config",
+    "{drive}Users\\*\\appsettings.json",
+    "{drive}Users\\*\\config.php",
 
-    "C:\\Users\\*\\.ssh\\id_rsa",
-    "C:\\Users\\*\\.ssh\\id_dsa",
-    "C:\\Users\\*\\.ssh\\authorized_keys",
-	"C:\\Users\\*\\.ssh\\id_ed25519",
-	"C:\\Users\\*\\.ssh\\id_ecdsa",
-	"C:\\Users\\*\\.aws\\config",
-	"C:\\Users\\*\\.npmrc",
-	"C:\\Users\\*\\.pypirc",
-	"C:\\Users\\*\\.netrc",
+    "{drive}Users\\*\\.ssh\\id_rsa",
+    "{drive}Users\\*\\.ssh\\id_dsa",
+    "{drive}Users\\*\\.ssh\\authorized_keys",
+	"{drive}Users\\*\\.ssh\\id_ed25519",
+	"{drive}Users\\*\\.ssh\\id_ecdsa",
+	"{drive}Users\\*\\.aws\\config",
+	"{drive}Users\\*\\.npmrc",
+	"{drive}Users\\*\\.pypirc",
+	"{drive}Users\\*\\.netrc",
 
-    "C:\\Users\\*\\.aws\\credentials",
-    "C:\\Users\\*\\.azure\\*",
-    "C:\\Users\\*\\.config\\gcloud\\*",
+    "{drive}Users\\*\\.aws\\credentials",
+    "{drive}Users\\*\\.azure\\*",
+    "{drive}Users\\*\\.config\\gcloud\\*",
 
-    "C:\\Users\\*\\.git\\config",
-    "C:\\Users\\*\\.git-credentials",
+    "{drive}Users\\*\\.git\\config",
+    "{drive}Users\\*\\.git-credentials",
 
-    "C:\\ProgramData\\Docker\\*",
-    "C:\\Users\\*\\.docker\\config.json",
+    "{drive}ProgramData\\Docker\\*",
+    "{drive}Users\\*\\.docker\\config.json",
 
-    "C:\\Users\\*\\.kube\\config",
+    "{drive}Users\\*\\.kube\\config",
 	
 
-    "C:\\Users\\*\\*.pfx",
-    "C:\\Users\\*\\*.p12",
+    "{drive}Users\\*\\*.pfx",
+    "{drive}Users\\*\\*.p12",
 
-    "C:\\Users\\*\\*.kdbx"
+    "{drive}Users\\*\\*.kdbx"
   ],
 
   "default_copy_search": [
-    "C:\\Users\\Public",
-    "C:\\Users\\*\\Desktop",
-    "C:\\Users\\*\\Documents",
-    "C:\\Users\\*\\Downloads",
+    "{sysdrive}Users\\Public",
+    "{sysdrive}Users\\*\\Desktop",
+    "{sysdrive}Users\\*\\Documents",
+    "{sysdrive}Users\\*\\Downloads",
 
-    "C:\\Windows\\Temp",
-    "C:\\Users\\*\\AppData\\Local\\Temp",
-    "C:\\Temp",
+    "{sysdrive}Windows\\Temp",
+    "{sysdrive}Users\\*\\AppData\\Local\\Temp",
+    "{sysdrive}Temp",
 
-    "C:\\inetpub\\wwwroot",
-    "C:\\xampp\\htdocs",
-    "C:\\wamp*\\www",
-    "C:\\Program Files\\Apache*\\htdocs",
-    "C:\\nginx\\html",
+    "{sysdrive}inetpub\\wwwroot",
+    "{sysdrive}xampp\\htdocs",
+    "{sysdrive}wamp*\\www",
+    "{sysdrive}Program Files\\Apache*\\htdocs",
+    "{sysdrive}nginx\\html",
 
-    "C:\\inetpub\\logs\\LogFiles",
-    "C:\\Windows\\Logs",
-    "C:\\Windows\\System32\\LogFiles"
+    "{sysdrive}inetpub\\logs\\LogFiles",
+    "{sysdrive}Windows\\Logs",
+    "{sysdrive}Windows\\System32\\LogFiles"
   ],
 
   "sensitive_patterns": [
@@ -528,25 +528,27 @@
     "*.myd",
     "*.myi",
 
-    "*.config",
     "*.env",
     "*.kdbx",
     "*.frm",
     "*.mdb",
     "*.accdb",
     "*.dbf",
-	
-	"*.pem",
-	"*.key",
-	"*.ppk",
-	"*.jks",
-	"*.keystore",
-	"*.ovpn",
-	"*.rdp",
-	"*.pfx",
-	"*.p12",
-	"unattend*.xml",
 
+    "*.pem",
+    "*.key",
+    "*.ppk",
+    "*.jks",
+    "*.keystore",
+    "*.ovpn",
+    "*.rdp",
+    "*.pfx",
+    "*.p12",
+    "unattend*.xml"
+  ],
+
+  "webroot_sensitive_patterns": [
+    "*.config",
     "*.php",
     "*.js",
     "*.asp",
@@ -626,7 +628,6 @@
     "Apple",
 	"Amazon",
 	"Internet Security Research Group",
-	"Cloudflare",
     "Starfield",
     "Comodo",
     "Izenpe",
@@ -660,5 +661,35 @@
     "D-TRUST",
     "ANF Autoridad de Certificación",
     "ANF AC"
+  ],
+
+  "browser_high_risk_permissions": [
+    "debugger",
+    "nativeMessaging",
+    "proxy",
+    "webRequest",
+    "webRequestBlocking",
+    "cookies",
+    "clipboardRead",
+    "management",
+    "scripting",
+    "downloads"
+  ],
+
+  "browser_broad_host_patterns": [
+    "<all_urls>",
+    "*://*/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+
+  "browser_insecure_flags": [
+    "--disable-web-security",
+    "--ignore-certificate-errors",
+    "--remote-debugging-port",
+    "--load-extension",
+    "--no-sandbox",
+    "--allow-running-insecure-content",
+    "--start-debugger-server"
   ]
 }

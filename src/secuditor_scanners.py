@@ -1,9 +1,14 @@
 # Secuditor Scanners – Copyright (c) 2026 Menahem Levinski
 
 import os
+import sys
 import re
+import stat
 import time
+import contextlib
 import hashlib
+import html
+import sqlite3
 import textwrap
 import ipaddress
 import ctypes
@@ -16,9 +21,10 @@ import psutil
 import socket
 import ssl
 import winreg
-import win32gui, win32con, win32process, win32clipboard
+import xml.etree.ElementTree as ET
+import win32gui, win32con, win32process, win32clipboard, win32security
 
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from ctypes import wintypes
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -47,6 +53,8 @@ def clear_audit_caches():
     _suspicious_proxy_cache = None
     SuspiciousProcesses._cache = None
     SuspiciousProcesses.is_microsoft_signed.cache_clear()
+    SensitivePaths._cache = None
+    WebBrowserScanner._cache = None
 from secuditor_utilities import (
     resource_path,
     _system_exe,
@@ -74,11 +82,55 @@ LOLBINS = set(SEC["lolbins"])
 SENSITIVE_PATH_TEMPLATES = SEC["sensitive_path_templates"]
 DEFAULT_COPY_SEARCH = SEC["default_copy_search"]
 SENSITIVE_PATTERNS = SEC["sensitive_patterns"]
+WEBROOT_SENSITIVE_PATTERNS = SEC.get(
+    "webroot_sensitive_patterns",
+    ["*.config", "*.php", "*.js", "*.asp", "*.aspx"],
+)
 KNOWN_BENIGN_FILES = {f.lower() for f in SEC.get("known_benign_files", [])}
 
 # --- Data for SSL/TLS Interception ---
 LEGIT_ISSUERS = SEC["legit_issuers"]
 PUBLIC_CAS = SEC["public_cas"]
+
+# --- Data for Web Browser Scanner ---
+BROWSER_HIGH_RISK_PERMISSIONS = set(
+    SEC.get(
+        "browser_high_risk_permissions",
+        [
+            "debugger",
+            "nativeMessaging",
+            "proxy",
+            "webRequest",
+            "webRequestBlocking",
+            "cookies",
+            "clipboardRead",
+            "management",
+            "scripting",
+            "downloads",
+        ],
+    )
+)
+BROWSER_BROAD_HOST_PATTERNS = set(
+    SEC.get(
+        "browser_broad_host_patterns",
+        ["<all_urls>", "*://*/*", "http://*/*", "https://*/*"],
+    )
+)
+BROWSER_INSECURE_FLAGS = tuple(
+    f.lower()
+    for f in SEC.get(
+        "browser_insecure_flags",
+        [
+            "--disable-web-security",
+            "--ignore-certificate-errors",
+            "--remote-debugging-port",
+            "--load-extension",
+            "--no-sandbox",
+            "--allow-running-insecure-content",
+            "--start-debugger-server",
+        ],
+    )
+)
 
 
 # ===== Shared Diagram Formatting Helpers =====
@@ -184,20 +236,27 @@ class SSLInspection:
         return None
 
     @staticmethod
-    def _fetch_peer_cert(host: str, port: int, context: ssl.SSLContext):
-        """Connect, perform TLS handshake, and return (DER bytes, negotiated TLS version)."""
-        with socket.create_connection((host, port), timeout=5) as sock:
+    def _fetch_peer_cert(host: str, port: int, context: ssl.SSLContext, connect_host=None):
+        """Connect, perform TLS handshake, and return (DER bytes, negotiated TLS version, peer IP)."""
+        target = connect_host or host
+        with socket.create_connection((target, port), timeout=5) as sock:
+            peer_ip = None
+            try:
+                peer_ip = sock.getpeername()[0]
+            except OSError:
+                peer_ip = None
             with context.wrap_socket(sock, server_hostname=host) as ssock:
-                return ssock.getpeercert(binary_form=True), ssock.version()
+                return ssock.getpeercert(binary_form=True), ssock.version(), peer_ip
 
-    def _verify_public_chain(self, host: str, port: int):
+    def _verify_public_chain(self, host: str, port: int, expected_fingerprint=None, connect_host=None):
         """
         Verify certificate chain against public WebPKI roots (certifi).
 
         Returns:
-            True if trusted by Mozilla/certifi roots,
+            True if trusted by Mozilla/certifi roots (and matching expected_fingerprint when given),
             False if certificate/hostname verification fails against certifi,
-            None if certifi is unavailable or a transient socket error occurred.
+            None if certifi is unavailable, a transient socket error occurred, or the leaf
+                 certificate changed between verification stages.
         """
         if certifi is None:
             return None
@@ -205,7 +264,11 @@ class SSLInspection:
             public_ctx = ssl.create_default_context(cafile=certifi.where())
             public_ctx.check_hostname = True
             public_ctx.verify_mode = ssl.CERT_REQUIRED
-            self._fetch_peer_cert(host, port, public_ctx)
+            pub_der, _, _ = self._fetch_peer_cert(host, port, public_ctx, connect_host=connect_host)
+            if expected_fingerprint is not None:
+                pub_fp = hashlib.sha256(pub_der).hexdigest()
+                if pub_fp != expected_fingerprint:
+                    return None
             return True
         except ssl.SSLCertVerificationError:
             return False
@@ -232,8 +295,9 @@ class SSLInspection:
 
             os_trusted = True
             verify_error = None
+            peer_ip = None
             try:
-                der, tls_version = self._fetch_peer_cert(host, port, os_ctx)
+                der, tls_version, peer_ip = self._fetch_peer_cert(host, port, os_ctx)
             except ssl.SSLCertVerificationError as verify_exc:
                 os_trusted = False
                 verify_error = getattr(verify_exc, "verify_message", None) or str(verify_exc)
@@ -241,10 +305,21 @@ class SSLInspection:
                 raw_ctx = ssl.create_default_context()
                 raw_ctx.check_hostname = False
                 raw_ctx.verify_mode = ssl.CERT_NONE
-                der, tls_version = self._fetch_peer_cert(host, port, raw_ctx)
+                der, tls_version, peer_ip = self._fetch_peer_cert(host, port, raw_ctx)
+
+            fingerprint_stage1 = hashlib.sha256(der).hexdigest()
 
             # --- Stage 2: Check whether an OS-trusted cert also chains to a public WebPKI root ---
-            public_trusted = self._verify_public_chain(host, port) if os_trusted else False
+            public_trusted = (
+                self._verify_public_chain(
+                    host,
+                    port,
+                    expected_fingerprint=fingerprint_stage1,
+                    connect_host=peer_ip,
+                )
+                if os_trusted
+                else False
+            )
 
             cert = x509.load_der_x509_certificate(der)
             issuer = cert.issuer.rfc4514_string()
@@ -314,11 +389,11 @@ class SSLInspection:
 
             # --- Detection & classification ---
             issuer_fields = self._extract_issuer_fields(cert)
-            matched_public_ca = self._matches_issuer_list(issuer_fields, PUBLIC_CAS)
             matched_legit_vendor = self._matches_issuer_list(issuer_fields, LEGIT_ISSUERS)
 
             triggers = []
             trust_mismatch = False
+            public_check_inconclusive = False
 
             if not os_trusted:
                 trust_mismatch = True
@@ -328,9 +403,8 @@ class SSLInspection:
             elif public_trusted is False:
                 trust_mismatch = True
                 triggers.append("Non-public root CA")
-            elif public_trusted is None and not matched_public_ca:
-                trust_mismatch = True
-                triggers.append("Unknown issuer")
+            elif public_trusted is None:
+                public_check_inconclusive = True
 
             validity_days = (not_after - not_before).days
             unusual_lifetime = validity_days <= 0 or validity_days > 825
@@ -356,16 +430,19 @@ class SSLInspection:
                 if not os_trusted or not host_matched or weak_sig or unusual_lifetime:
                     verdict = "Suspicious"
                     reason = ", ".join(triggers)
-                elif matched_legit_vendor:
+                elif os_trusted and public_trusted is False and matched_legit_vendor:
                     legit = True
                     verdict = "Likely Legitimate"
-                    reason = f"Issued by {matched_legit_vendor} (firewall inspection)"
+                    reason = f"OS-trusted non-public CA matching {matched_legit_vendor} (name match)"
                 else:
                     verdict = "Suspicious"
                     reason = ", ".join(triggers)
             elif triggers:
                 verdict = "Suspicious"
                 reason = ", ".join(triggers)
+            elif public_check_inconclusive:
+                verdict = "Unknown"
+                reason = "Public CA verification unavailable"
             else:
                 verdict = "Not Detected"
 
@@ -514,6 +591,18 @@ class SuspiciousProxy:
         except OSError:
             return default
 
+    @classmethod
+    def _is_loopback_host(cls, host):
+        if not host:
+            return False
+        cleaned = host.strip().lower()
+        if cleaned in cls._LOCALHOST_HOSTS:
+            return True
+        try:
+            return ipaddress.ip_address(cleaned.strip("[]")).is_loopback
+        except ValueError:
+            return False
+
     @staticmethod
     def _parse_proxy_endpoints(raw_value):
         """Parse Windows ProxyServer / WinHTTP / URL proxy strings into (scheme, host, port) tuples."""
@@ -521,22 +610,29 @@ class SuspiciousProxy:
         if not isinstance(raw_value, str) or not raw_value.strip():
             return endpoints
 
-        for part in raw_value.split(";"):
+        default_ports = {"http": 80, "https": 443, "socks": 1080, "socks4": 1080, "socks5": 1080}
+
+        for part in re.split(r"[;\s]+", raw_value.strip()):
             item = part.strip()
             if not item:
                 continue
 
             scheme = "http"
-            if "=" in item and "://" not in item:
-                scheme_part, item = item.split("=", 1)
-                scheme = scheme_part.strip().lower() or "http"
+            kv_match = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*)=(.+)$", item)
+            if kv_match:
+                scheme = kv_match.group(1).strip().lower() or "http"
+                item = kv_match.group(2).strip()
+                if not item:
+                    continue
 
             candidate = item if "://" in item else f"{scheme}://{item}"
             try:
                 parsed = urlparse(candidate)
                 host = (parsed.hostname or "").strip().lower()
-                port = parsed.port
                 parsed_scheme = (parsed.scheme or scheme).lower()
+                port = parsed.port
+                if port is None:
+                    port = default_ports.get(parsed_scheme)
                 if host:
                     endpoints.append((parsed_scheme, host, port))
             except Exception:
@@ -648,34 +744,50 @@ class SuspiciousProxy:
         user_sub = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
         policy_sub = r"Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings"
 
+        def _clean_str(val):
+            s = str(val).strip() if val is not None else ""
+            return s or None
+
         hkcu_enable = cls._read_reg(winreg.HKEY_CURRENT_USER, user_sub, "ProxyEnable", 0)
-        hkcu_server = cls._read_reg(winreg.HKEY_CURRENT_USER, user_sub, "ProxyServer")
-        hkcu_pac = cls._read_reg(winreg.HKEY_CURRENT_USER, user_sub, "AutoConfigURL")
+        hkcu_server = _clean_str(cls._read_reg(winreg.HKEY_CURRENT_USER, user_sub, "ProxyServer"))
+        hkcu_pac = _clean_str(cls._read_reg(winreg.HKEY_CURRENT_USER, user_sub, "AutoConfigURL"))
         hkcu_auto = bool(cls._read_reg(winreg.HKEY_CURRENT_USER, user_sub, "AutoDetect", 0))
 
         hklm_enable = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, user_sub, "ProxyEnable", 0)
-        hklm_server = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, user_sub, "ProxyServer")
-        hklm_pac = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, user_sub, "AutoConfigURL")
+        hklm_server = _clean_str(cls._read_reg(winreg.HKEY_LOCAL_MACHINE, user_sub, "ProxyServer"))
+        hklm_pac = _clean_str(cls._read_reg(winreg.HKEY_LOCAL_MACHINE, user_sub, "AutoConfigURL"))
 
         pol_per_user = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, policy_sub, "ProxySettingsPerUser")
         pol_enable = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, policy_sub, "ProxyEnable", 0)
-        pol_server = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, policy_sub, "ProxyServer")
-        pol_pac = cls._read_reg(winreg.HKEY_LOCAL_MACHINE, policy_sub, "AutoConfigURL")
+        pol_server = _clean_str(cls._read_reg(winreg.HKEY_LOCAL_MACHINE, policy_sub, "ProxyServer"))
+        pol_pac = _clean_str(cls._read_reg(winreg.HKEY_LOCAL_MACHINE, policy_sub, "AutoConfigURL"))
 
         manual = None
-        if hkcu_enable and hkcu_server:
-            manual = str(hkcu_server).strip()
-        elif hklm_enable and hklm_server:
-            manual = f"[HKLM] {str(hklm_server).strip()}"
-        elif pol_enable and pol_server:
-            manual = f"[Policy] {str(pol_server).strip()}"
+        raw_manual = ""
+        if pol_per_user == 0:
+            sources = [
+                (hklm_enable, hklm_server, "[HKLM] "),
+                (pol_enable, pol_server, "[Policy] "),
+                (hkcu_enable, hkcu_server, ""),
+            ]
+            pac = hklm_pac or pol_pac or hkcu_pac
+        else:
+            sources = [
+                (hkcu_enable, hkcu_server, ""),
+                (hklm_enable, hklm_server, "[HKLM] "),
+                (pol_enable, pol_server, "[Policy] "),
+            ]
+            pac = hkcu_pac or hklm_pac or pol_pac
 
-        pac = hkcu_pac or hklm_pac or pol_pac
-        pac = str(pac).strip() if pac else None
+        for enabled, server, prefix in sources:
+            if enabled and server:
+                manual = f"{prefix}{server}"
+                raw_manual = server
+                break
 
         return {
             "manual": manual,
-            "raw_manual": str(hkcu_server or hklm_server or pol_server or "").strip() if manual else "",
+            "raw_manual": raw_manual,
             "pac": pac,
             "autodetect": hkcu_auto,
             "policy_enforced": bool(pol_enable and (pol_server or pol_pac)) or (pol_per_user == 0),
@@ -787,7 +899,7 @@ class SuspiciousProxy:
                         triggers.append(msg)
                         high_risk_triggers.add(msg)
 
-                if host in self._LOCALHOST_HOSTS and port:
+                if self._is_loopback_host(host) and port:
                     info = self._find_listener_for_port(port, host)
                     if listener_info is None:
                         listener_info = info
@@ -1035,49 +1147,306 @@ class SuspiciousProxy:
 # ===== Sensitive Paths =====
 class SensitivePaths:
 
+    _cache = None
+    _MAX_DISPLAY = 100
+
+    _WEBROOT_MARKERS = (
+        "\\inetpub\\wwwroot",
+        "\\xampp\\htdocs",
+        "\\www",
+        "\\htdocs",
+        "\\nginx\\html",
+    )
+
+    _CRED_KEY_NAMES = {
+        "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa", "authorized_keys",
+        "credentials", ".git-credentials", ".netrc", ".npmrc", ".pypirc",
+        "sitemanager.xml", "recentservers.xml", "sysprep.xml",
+    }
+    _CRED_KEY_EXTS = {".pem", ".key", ".ppk", ".pfx", ".p12", ".jks", ".keystore"}
+    _VAULT_EXTS = {".kdbx"}
+    _RDP_VPN_EXTS = {".rdp", ".ovpn"}
+    _CONFIG_NAMES = {".env", "web.config", "appsettings.json", "config.php", "config.json", "config"}
+    _DB_BACKUP_EXTS = {
+        ".dit", ".mdf", ".ldf", ".ndf", ".edb", ".ad",
+        ".bak", ".bkf", ".bkp", ".dump", ".dmp", ".sql",
+        ".pst", ".ost", ".sqlite", ".sqlite3", ".db",
+        ".ibd", ".myd", ".myi", ".frm", ".mdb", ".accdb", ".dbf",
+    }
+    _WEBROOT_EXTS = {".php", ".js", ".asp", ".aspx", ".config"}
+
+    @staticmethod
+    def _sys_drive():
+        return os.environ.get("SystemDrive", "C:").rstrip("\\/") + "\\"
+
     @staticmethod
     def get_fixed_drives():
         drives = []
+        DRIVE_FIXED = 3
+        get_drive_type = None
+        if os.name == "nt":
+            try:
+                k32 = ctypes.WinDLL(_system_exe("kernel32.dll"), use_last_error=True)
+                get_drive_type = k32.GetDriveTypeW
+                get_drive_type.argtypes = [wintypes.LPCWSTR]
+                get_drive_type.restype = wintypes.UINT
+            except Exception:
+                get_drive_type = None
         for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             drive = f"{letter}:\\"
-            if os.path.exists(drive):
+            if get_drive_type is not None:
+                try:
+                    if get_drive_type(drive) == DRIVE_FIXED:
+                        drives.append(drive)
+                except Exception:
+                    continue
+            elif os.path.exists(drive):
                 drives.append(drive)
         return drives
 
     @classmethod
     def build_sensitive_paths(cls):
         paths = []
-        for drive in cls.get_fixed_drives():
-            for tpl in SENSITIVE_PATH_TEMPLATES:
-                paths.append(tpl.format(drive=drive))
+        seen = set()
+        sys_drive = cls._sys_drive()
+        fixed_drives = cls.get_fixed_drives() or [sys_drive]
+        for tpl in SENSITIVE_PATH_TEMPLATES:
+            if "{drive}" in tpl:
+                for drive in fixed_drives:
+                    p = tpl.format(drive=drive, sysdrive=sys_drive)
+                    key = os.path.normcase(p)
+                    if key not in seen:
+                        seen.add(key)
+                        paths.append(p)
+            else:
+                p = tpl.format(drive=sys_drive, sysdrive=sys_drive)
+                key = os.path.normcase(p)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(p)
         return paths
 
-    # --- Utility: Safe stat ---
     @staticmethod
-    def has_everyone_permission(path):
+    def _is_symlink_or_junction(path_or_entry):
+        """Return True for symlinks and NTFS mount points/junctions (safe for OneDrive cloud folders)."""
         try:
-            cmd = [_system_exe("icacls"), path]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                env=_safe_subproc_env(),
-                **_subproc_kwargs_hide_window()
-            )
-            output = result.stdout.lower()
-            return "everyone" in output
+            if hasattr(path_or_entry, "is_symlink"):
+                if path_or_entry.is_symlink():
+                    return True
+                is_junc = getattr(path_or_entry, "is_junction", None)
+                if callable(is_junc) and is_junc():
+                    return True
+                st = path_or_entry.stat(follow_symlinks=False)
+            else:
+                if os.path.islink(path_or_entry):
+                    return True
+                is_junc = getattr(os.path, "isjunction", None)
+                if callable(is_junc) and is_junc(path_or_entry):
+                    return True
+                st = os.lstat(path_or_entry)
+            if getattr(st, "st_reparse_tag", 0) in (0xA0000003, 0xA000000C):
+                return True
+        except OSError:
+            return True
+        return False
+
+    # --- Utility: Locale-independent, DENY-aware SID ACL check ---
+    @staticmethod
+    def inspect_acl(path):
+        """
+        Inspect a file's DACL by well-known Windows SIDs (no icacls subprocess).
+        Returns (level, label):
+          - ("exposed", "Exposed: Everyone" | "Exposed: Anonymous" | "Exposed: NULL DACL")
+          - ("shared",  "Shared: Users" | "Shared: AuthUsers")
+          - ("private", "Private" | "Protected")
+        """
+        try:
+            sd = win32security.GetFileSecurity(path, win32security.DACL_SECURITY_INFORMATION)
+            dacl = sd.GetSecurityDescriptorDacl()
+            if dacl is None:
+                return "exposed", "Exposed: NULL DACL"
+
+            allow_types = {win32security.ACCESS_ALLOWED_ACE_TYPE}
+            deny_types = {win32security.ACCESS_DENIED_ACE_TYPE}
+            object_types = set()
+            if hasattr(win32security, "ACCESS_ALLOWED_OBJECT_ACE_TYPE"):
+                allow_types.add(win32security.ACCESS_ALLOWED_OBJECT_ACE_TYPE)
+                object_types.add(win32security.ACCESS_ALLOWED_OBJECT_ACE_TYPE)
+            if hasattr(win32security, "ACCESS_DENIED_OBJECT_ACE_TYPE"):
+                deny_types.add(win32security.ACCESS_DENIED_OBJECT_ACE_TYPE)
+                object_types.add(win32security.ACCESS_DENIED_OBJECT_ACE_TYPE)
+            inherit_only = getattr(win32security, "INHERIT_ONLY_ACE", 0x8)
+
+            denied_sids = set()
+            exposed_label = None
+            shared_label = None
+
+            for i in range(dacl.GetAceCount()):
+                try:
+                    ace = dacl.GetAce(i)
+                    ace_type, ace_flags = ace[0]
+                    if ace_flags & inherit_only:
+                        continue
+                    sid = ace[4] if (ace_type in object_types and len(ace) >= 5) else ace[2]
+                    sid_str = win32security.ConvertSidToStringSid(sid)
+                except (TypeError, IndexError, win32security.error):
+                    continue
+
+                if ace_type in deny_types:
+                    denied_sids.add(sid_str)
+                    continue
+                if ace_type not in allow_types or sid_str in denied_sids:
+                    continue
+
+                if sid_str == "S-1-1-0":
+                    exposed_label = "Exposed: Everyone"
+                elif sid_str == "S-1-5-7" and exposed_label is None:
+                    exposed_label = "Exposed: Anonymous"
+                elif sid_str == "S-1-5-32-545" and shared_label is None:
+                    shared_label = "Shared: Users"
+                elif sid_str == "S-1-5-11" and shared_label is None:
+                    shared_label = "Shared: AuthUsers"
+
+            if exposed_label:
+                return "exposed", exposed_label
+            if shared_label:
+                return "shared", shared_label
+            return "private", "Private"
+        except win32security.error as we:
+            if getattr(we, "winerror", None) == 5:
+                return "private", "Protected"
+            return "private", "Private"
         except Exception:
-            return False
+            return "private", "Private"
+
+    @classmethod
+    def has_everyone_permission(cls, path):
+        """Backward-compatible wrapper returning True when Everyone/Anonymous/NULL DACL has access."""
+        level, _ = cls.inspect_acl(path)
+        return level == "exposed"
 
     @staticmethod
     def is_hidden(path):
-        """Basic hidden check using filename starting with dot."""
-        return os.path.basename(path).startswith(".")
+        """Check Windows FILE_ATTRIBUTE_HIDDEN (not Unix leading-dot convention)."""
+        try:
+            st = os.lstat(path)
+            hidden_flag = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2)
+            return bool(getattr(st, "st_file_attributes", 0) & hidden_flag)
+        except OSError:
+            return False
+
+    @staticmethod
+    def _inspect_rdp_file(path):
+        """
+        Read-only inspection of .rdp metadata (capped at 64 KB).
+        Returns dict: {"skip": bool, "has_password": bool, "note": str}.
+        Skips auto-generated Default.rdp files that contain no target/user/password.
+        """
+        info = {"skip": False, "has_password": False, "note": ""}
+        base_l = os.path.basename(path).lower()
+        try:
+            with open(path, "rb") as fp:
+                raw = fp.read(65536)
+            if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+                text = raw.decode("utf-16", errors="ignore")
+            else:
+                text = raw.decode("utf-8", errors="ignore")
+            text_l = text.lower()
+
+            has_pwd = "password 51:b:" in text_l
+            has_user = bool(re.search(r"(?m)^\s*username:s:\S+", text_l))
+            has_addr = bool(re.search(r"(?m)^\s*full address:s:\S+", text_l))
+
+            if has_pwd:
+                info["has_password"] = True
+                info["note"] = "Saved password"
+            elif has_user and has_addr:
+                info["note"] = "Target & username saved"
+            elif has_user:
+                info["note"] = "Username saved"
+            elif has_addr:
+                info["note"] = "Target host saved"
+            elif base_l == "default.rdp":
+                info["skip"] = True
+        except (PermissionError, FileNotFoundError, OSError):
+            pass
+        return info
+
+    @classmethod
+    def _classify_file(cls, path, acl_level, acl_label, rdp_info=None):
+        """Classify a matched sensitive file into (risk_tier, category, detail_note)."""
+        base_l = os.path.basename(path).lower()
+        _, ext_l = os.path.splitext(base_l)
+        path_l = path.lower()
+
+        # Determine category
+        if (
+            base_l in cls._CRED_KEY_NAMES
+            or base_l.startswith("unattend")
+            or ext_l in cls._CRED_KEY_EXTS
+            or "\\.ssh\\" in path_l
+            or "\\.aws\\credentials" in path_l
+        ):
+            category = "Credentials & Keys"
+        elif ext_l in cls._VAULT_EXTS:
+            category = "Password Vault"
+        elif ext_l in cls._RDP_VPN_EXTS:
+            category = "RDP Profile" if ext_l == ".rdp" else "VPN Profile"
+        elif ext_l == ".env" or base_l in cls._CONFIG_NAMES or "\\.kube\\" in path_l or "\\.docker\\" in path_l:
+            category = "Config & Secret"
+        elif ext_l in cls._DB_BACKUP_EXTS or base_l in {"ntds.dit", "sam", "security", "system", "software"}:
+            category = "Database & Backup"
+        elif ext_l in cls._WEBROOT_EXTS:
+            category = "Webroot File"
+        else:
+            category = "Sensitive File"
+
+        note = (rdp_info or {}).get("note") or ""
+
+        # Determine risk tier
+        if acl_level == "exposed" or (rdp_info and rdp_info.get("has_password")):
+            risk = "High"
+        elif acl_level == "shared":
+            risk = "Medium"
+        elif category == "Credentials & Keys" or ext_l == ".env" or base_l == ".env":
+            # Plaintext credential/key files even with Private ACL warrant Medium attention
+            if base_l in {"ntds.dit", "sam", "security", "system", "software"}:
+                risk = "Low"
+            else:
+                risk = "Medium"
+        else:
+            risk = "Low"
+
+        return risk, category, note
+
+    def _evaluate_match(self, path):
+        """Evaluate a candidate file path; returns finding dict or None if skipped."""
+        if self._is_symlink_or_junction(path) or not os.path.isfile(path):
+            return None
+
+        base_l = os.path.basename(path).lower()
+        if base_l in KNOWN_BENIGN_FILES:
+            return None
+
+        rdp_info = None
+        if base_l.endswith(".rdp"):
+            rdp_info = self._inspect_rdp_file(path)
+            if rdp_info.get("skip"):
+                return None
+
+        acl_level, acl_label = self.inspect_acl(path)
+        risk, category, note = self._classify_file(path, acl_level, acl_label, rdp_info=rdp_info)
+        return {
+            "target": path,
+            "risk": risk,
+            "category": category,
+            "acl": acl_label,
+            "note": note,
+        }
 
     # --- SENSITIVE TARGET SCAN ---
     def check_sensitive_targets(self):
         results = []
-        SYSTEM_PROTECTED_PREFIXES = [r"C:\Windows\System32\config", r"C:\Windows\NTDS", r"C:\Windows\SYSVOL"]
         SENSITIVE_PATHS = self.build_sensitive_paths()
 
         for p in SENSITIVE_PATHS:
@@ -1088,38 +1457,9 @@ class SensitivePaths:
             for m in matches:
                 if not os.path.exists(m):
                     continue
-
-                base = os.path.basename(m).lower()
-
-                if base in KNOWN_BENIGN_FILES:
-                    continue
-
-                # Protected system DB/hives treated as low risk
-                if base in {"ntds.dit", "sam", "security", "system", "software"}:
-                    results.append({"target": m, "risk": "low risk"})
-                    continue
-
-                in_system_prefix = any(m.lower().startswith(pref.lower()) for pref in SYSTEM_PROTECTED_PREFIXES)
-
-                locked = False
-                try:
-                    if os.path.isfile(m):
-                        with open(m, "rb"):
-                            pass
-                except PermissionError:
-                    locked = True
-
-                everyone_access = self.has_everyone_permission(m)
-                hidden = self.is_hidden(m)
-
-                if everyone_access:
-                    risk = "exposed"
-                elif (not locked) and (not hidden) and (not in_system_prefix):
-                    risk = "weak path"
-                else:
-                    risk = "low risk"
-
-                results.append({"target": m, "risk": risk})
+                item = self._evaluate_match(m)
+                if item is not None:
+                    results.append(item)
 
         return results
 
@@ -1127,34 +1467,59 @@ class SensitivePaths:
     def search_for_db_copies(self, search_dirs, max_depth=3):
         """
         Recursively scan directories for sensitive files.
-        Skips unconfigured user profiles while allowing explicitly targeted profile subdirectories.
+        Scopes noisy web-code patterns strictly to webroot directories.
         """
         found = []
+        sys_drive = self._sys_drive()
+        users_prefix = os.path.normcase(os.path.join(sys_drive, "Users") + "\\")
+        public_prefix = os.path.normcase(os.path.join(sys_drive, "Users", "Public"))
 
-        def safe_scan(base, depth, skip_user_profiles=True):
+        base_patterns = tuple(p.lower() for p in SENSITIVE_PATTERNS)
+        webroot_patterns = tuple(p.lower() for p in WEBROOT_SENSITIVE_PATTERNS)
+
+        def _is_webroot_dir(dir_norm):
+            return any(dir_norm.endswith(m) or (m + "\\") in dir_norm for m in self._WEBROOT_MARKERS)
+
+        def safe_scan(base, depth, skip_user_profiles=True, active_patterns=base_patterns):
             if depth > max_depth:
                 return
             try:
-                for entry in os.scandir(base):
-                    path = entry.path
-                    path_l = path.lower()
+                with os.scandir(base) as entries:
+                    for entry in entries:
+                        try:
+                            path = entry.path
+                            path_norm = os.path.normcase(path)
 
-                    # Skip user profiles only when walking broader root paths
-                    if skip_user_profiles and path_l.startswith("c:\\users\\") and not path_l.startswith("c:\\users\\public"):
-                        continue
+                            # Skip user profiles only when walking broader root paths
+                            if (
+                                skip_user_profiles
+                                and path_norm.startswith(users_prefix)
+                                and not path_norm.startswith(public_prefix)
+                            ):
+                                continue
 
-                    if entry.is_file():
-                        name_l = entry.name.lower()
-                        if name_l in KNOWN_BENIGN_FILES:
+                            if self._is_symlink_or_junction(entry):
+                                continue
+
+                            if entry.is_file(follow_symlinks=False):
+                                name_l = entry.name.lower()
+                                if name_l in KNOWN_BENIGN_FILES:
+                                    continue
+                                for pat in active_patterns:
+                                    if glob.fnmatch.fnmatch(name_l, pat):
+                                        item = self._evaluate_match(path)
+                                        if item is not None:
+                                            found.append(item)
+                                        break
+                            elif entry.is_dir(follow_symlinks=False):
+                                safe_scan(
+                                    path,
+                                    depth + 1,
+                                    skip_user_profiles=skip_user_profiles,
+                                    active_patterns=active_patterns,
+                                )
+                        except (PermissionError, FileNotFoundError, OSError):
                             continue
-                        for pat in SENSITIVE_PATTERNS:
-                            if glob.fnmatch.fnmatch(name_l, pat.lower()):
-                                exposed = self.has_everyone_permission(path)
-                                risk = "exposed" if exposed else "low risk"
-                                found.append({"target": path, "risk": risk})
-                                break
-                    elif entry.is_dir():
-                        safe_scan(path, depth + 1, skip_user_profiles=skip_user_profiles)
 
             except (PermissionError, FileNotFoundError):
                 pass
@@ -1163,21 +1528,23 @@ class SensitivePaths:
 
         expanded_dirs = []
         seen_dirs = set()
-        for base in search_dirs:
-            if not base:
+        for raw_base in search_dirs:
+            if not raw_base:
                 continue
+            base = raw_base.format(sysdrive=sys_drive, drive=sys_drive) if "{" in raw_base else raw_base
             candidates = glob.glob(base) if ("*" in base or "?" in base) else [base]
             for candidate in candidates:
-                if os.path.isdir(candidate):
+                if os.path.isdir(candidate) and not self._is_symlink_or_junction(candidate):
                     norm_dir = os.path.normcase(os.path.abspath(candidate))
                     if norm_dir not in seen_dirs:
                         seen_dirs.add(norm_dir)
                         expanded_dirs.append(candidate)
 
         for target_dir in expanded_dirs:
-            target_l = os.path.normcase(os.path.abspath(target_dir))
-            skip_profiles = not target_l.startswith("c:\\users\\")
-            safe_scan(target_dir, 0, skip_user_profiles=skip_profiles)
+            target_norm = os.path.normcase(os.path.abspath(target_dir))
+            skip_profiles = not target_norm.startswith(users_prefix)
+            pats = (base_patterns + webroot_patterns) if _is_webroot_dir(target_norm) else base_patterns
+            safe_scan(target_dir, 0, skip_user_profiles=skip_profiles, active_patterns=pats)
 
         # Deduplicate and sort
         seen = set()
@@ -1190,34 +1557,43 @@ class SensitivePaths:
         return out
 
     # --- MINIMAL REPORT ---
-    @staticmethod
-    def minimal_report(targets, copies):
-        sensitive = []
-        seen = set()
+    @classmethod
+    def minimal_report(cls, targets, copies):
+        risk_rank = {"High": 0, "Medium": 1, "Low": 2}
+        merged = {}
 
         for item in targets + copies:
             target = item["target"]
-            key = os.path.normcase(
-                os.path.abspath(target)
-            )
+            key = os.path.normcase(os.path.abspath(target))
+            cur_rank = risk_rank.get(item.get("risk"), 3)
+            if key not in merged or cur_rank < risk_rank.get(merged[key].get("risk"), 3):
+                merged[key] = item
 
-            if key in seen:
-                continue
+        ordered = sorted(
+            merged.values(),
+            key=lambda x: (risk_rank.get(x.get("risk"), 3), x["target"].lower()),
+        )
 
-            seen.add(key)
+        if not ordered:
+            return "No sensitive files detected"
 
-            sensitive.append(
-                f"{target} ({item['risk']})"
-            )
+        lines = ["", "Sensitive Files Detected:"]
+        shown = ordered[: cls._MAX_DISPLAY]
+        for item in shown:
+            parts = [
+                item.get("risk", "Low"),
+                item.get("category", "Sensitive File"),
+                item.get("acl", "Private"),
+            ]
+            if item.get("note"):
+                parts.append(item["note"])
+            lines.append(f"- {item['target']} ({' | '.join(parts)})")
 
-        if sensitive:
-            result = "\nSensitive Files Detected:\n"
-            for s in sensitive:
-                result += f"- {s}\n"
-        else:
-            result = "No sensitive files detected"
+        extra = len(ordered) - len(shown)
+        if extra > 0:
+            lines.append(f"... (+{extra} more)")
 
-        return result
+        return "\n".join(lines)
 
     # --- STRUCTURED CHECK ---
     def check_sensitive_paths(self, check_dirs=None):
@@ -1232,17 +1608,34 @@ class SensitivePaths:
         return {"targets": targets, "copies": copies}
 
     # --- ENTRY POINT ---
-    def show_sensitive_paths(self, check_dirs=None):
+    def show_sensitive_paths(self, check_dirs=None, run_all_clicked=None, single_check=None):
+        cls = type(self)
+
+        if run_all_clicked is None:
+            run_all_clicked = secuditor_modules.run_all_clicked
+        if single_check is None:
+            single_check = secuditor_modules.single_check
+
+        if (
+            check_dirs is None
+            and cls._cache is not None
+            and not run_all_clicked
+            and not single_check
+        ):
+            return cls._cache
+
         result = self.check_sensitive_paths(check_dirs=check_dirs)
         if "error" in result:
             return result["error"]
-        return self.minimal_report(result["targets"], result["copies"])
+        formatted = self.minimal_report(result["targets"], result["copies"])
+        if check_dirs is None:
+            cls._cache = formatted
+        return formatted
 
 # ===== Suspicious Processes =====
 class SuspiciousProcesses:
 
     _cache = None
-    _driver_services = None
 
     # --- Get private connections ---
     @staticmethod
@@ -1308,90 +1701,83 @@ class SuspiciousProcesses:
 
         return False
 
-    @staticmethod
-    def get_clipboard_text():
-        """Safely read clipboard text on Windows."""
-        try:
-            win32clipboard.OpenClipboard()
-            data = win32clipboard.GetClipboardData(win32con.CF_TEXT)
-            win32clipboard.CloseClipboard()
-
-            if isinstance(data, bytes):
-                return data.decode(errors="ignore")
-            return data
-
-        except Exception:
-            try:
-                win32clipboard.CloseClipboard()
-            except:
-                pass
-            return None
+    _last_clipboard_seq = None
 
     # --- Clipboard monitoring ---
-    @staticmethod
-    def clipboard_hash(text):
-        """Normalize clipboard content for comparison."""
-        if not text:
-            return None
-        return hashlib.sha256(text.encode(errors="ignore")).hexdigest()
-
     @classmethod
-    def get_clipboard_events(cls, poll_interval=0.1, samples=20):
+    def get_clipboard_events(cls):
         """
-        Snapshot clipboard state for correlation (NON-BLOCKING).
+        Snapshot clipboard sequence changes without blocking or locking OpenClipboard().
 
         Returns:
-            list of clipboard change events
+            list of clipboard change events observed since the previous baseline.
         """
-
-        last_hash = None
         events = []
-
-        for _ in range(samples):
-            try:
-                text = cls.get_clipboard_text()
-            except Exception:
-                text = ""
-
-            h = cls.clipboard_hash(text)
-
-            if h and h != last_hash:
+        try:
+            user32 = ctypes.WinDLL(_system_exe("user32.dll"), use_last_error=True)
+            get_seq = user32.GetClipboardSequenceNumber
+            get_seq.argtypes = []
+            get_seq.restype = wintypes.DWORD
+            seq = int(get_seq())
+            if cls._last_clipboard_seq is None:
+                # Establish baseline only; do not treat pre-existing clipboard content as a change
+                cls._last_clipboard_seq = seq
+            elif seq != cls._last_clipboard_seq:
+                cls._last_clipboard_seq = seq
                 events.append({
                     "timestamp": time.time(),
-                    "size": len(text) if text else 0,
+                    "size": 0,
                 })
-
-                last_hash = h
-
-                # keep memory bounded
-                if len(events) > 20:
-                    events.pop(0)
-
-            time.sleep(poll_interval)
+        except Exception:
+            pass
 
         return events
 
-    # --- Set services variable ---
-    @classmethod
-    def _get_driver_services(cls):
-        if cls._driver_services is None:
-            services = set()
-            for svc in psutil.win_service_iter():
-                try:
-                    info = svc.as_dict()
-                    binpath = (info.get("binpath") or "").lower()
-
-                    if ".sys" in binpath:
-                        services.add(info["name"].lower())
-
-                except Exception:
-                    continue
-            cls._driver_services = services
-        return cls._driver_services
-
     # --- Process privilege / module helpers ---
-    @staticmethod
-    def is_process_elevated(pid):
+    _win_elevation_apis = None
+
+    @classmethod
+    def _get_win_elevation_apis(cls):
+        if cls._win_elevation_apis is None:
+            kernel32 = ctypes.WinDLL(_system_exe("kernel32.dll"), use_last_error=True)
+            advapi32 = ctypes.WinDLL(_system_exe("advapi32.dll"), use_last_error=True)
+
+            open_process = kernel32.OpenProcess
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
+
+            open_process_token = advapi32.OpenProcessToken
+            open_process_token.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.HANDLE),
+            ]
+            open_process_token.restype = wintypes.BOOL
+
+            get_token_info = advapi32.GetTokenInformation
+            get_token_info.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            get_token_info.restype = wintypes.BOOL
+
+            cls._win_elevation_apis = (
+                open_process,
+                open_process_token,
+                get_token_info,
+                close_handle,
+            )
+        return cls._win_elevation_apis
+
+    @classmethod
+    def is_process_elevated(cls, pid):
         """
         Return:
             True  - process has an elevated token
@@ -1403,22 +1789,20 @@ class SuspiciousProcesses:
             TOKEN_QUERY = 0x0008
             TokenElevation = 20
 
-            OpenProcess = ctypes.windll.kernel32.OpenProcess
-            OpenProcess.restype = wintypes.HANDLE
+            OpenProcess, OpenProcessToken, GetTokenInformation, CloseHandle = (
+                cls._get_win_elevation_apis()
+            )
 
             process_handle = OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION,
                 False,
-                pid
+                int(pid),
             )
 
             if not process_handle:
                 return None
 
             try:
-                OpenProcessToken = ctypes.windll.advapi32.OpenProcessToken
-                OpenProcessToken.restype = wintypes.BOOL
-
                 token_handle = wintypes.HANDLE()
 
                 if not OpenProcessToken(
@@ -1429,9 +1813,6 @@ class SuspiciousProcesses:
                     return None
 
                 try:
-                    GetTokenInformation = ctypes.windll.advapi32.GetTokenInformation
-                    GetTokenInformation.restype = wintypes.BOOL
-
                     elevation = wintypes.DWORD()
                     returned = wintypes.DWORD()
 
@@ -1449,10 +1830,10 @@ class SuspiciousProcesses:
                     return elevation.value != 0
 
                 finally:
-                    ctypes.windll.kernel32.CloseHandle(token_handle)
+                    CloseHandle(token_handle)
 
             finally:
-                ctypes.windll.kernel32.CloseHandle(process_handle)
+                CloseHandle(process_handle)
 
         except Exception:
             return None
@@ -1483,6 +1864,12 @@ class SuspiciousProcesses:
                 "\\perflogs\\",
             )
 
+            sys_root = os.environ.get("SystemRoot") or r"C:\Windows"
+            win_module_prefixes = tuple(
+                os.path.normcase(os.path.join(sys_root, sub)) + os.sep
+                for sub in ("System32", "SysWOW64", "WinSxS")
+            )
+
             for module in modules:
                 path = getattr(module, "path", None)
 
@@ -1492,19 +1879,7 @@ class SuspiciousProcesses:
                 path_lower = os.path.normcase(path).lower()
 
                 # Skip normal Windows modules.
-                if path_lower.startswith(
-                    os.path.normcase(r"c:\windows\system32")
-                ):
-                    continue
-
-                if path_lower.startswith(
-                    os.path.normcase(r"c:\windows\syswow64")
-                ):
-                    continue
-
-                if path_lower.startswith(
-                    os.path.normcase(r"c:\windows\winsxs")
-                ):
+                if path_lower.startswith(win_module_prefixes):
                     continue
 
                 # User-writable / suspicious module location.
@@ -1699,10 +2074,8 @@ class SuspiciousProcesses:
             return False
 
         try:
-            escaped_path = exe_path.replace("'", "''")
-
             command = (
-                f"$sig = Get-AuthenticodeSignature -LiteralPath '{escaped_path}'; "
+                "$sig = Get-AuthenticodeSignature -LiteralPath $env:SECUDITOR_SIG_PATH; "
                 "$publisher = ''; "
                 "if ($sig.SignerCertificate) { "
                 "$publisher = $sig.SignerCertificate.GetNameInfo("
@@ -1725,7 +2098,7 @@ class SuspiciousProcesses:
                 encoding="utf-8",
                 errors="replace",
                 timeout=10,
-                env=_safe_subproc_env(),
+                env=_safe_subproc_env({"SECUDITOR_SIG_PATH": exe_path}),
                 stderr=subprocess.DEVNULL,
                 **_subproc_kwargs_hide_window()
             )
@@ -1796,13 +2169,389 @@ class SuspiciousProcesses:
             if not pat:
                 continue
             parts = pat.split()
-            escaped = r"\s+".join(re.escape(part) for part in parts)
             if pat.startswith("-"):
-                regex = re.compile(rf"(?:^|\s){escaped}(?=\s|$|=)")
+                escaped = r"\s+".join(re.escape(part) for part in parts)
+                regex = re.compile(rf"(?:^|\s){escaped}(?=\s|$|=|:)")
+            elif len(parts) > 1:
+                first = re.escape(parts[0])
+                if not parts[0].endswith((".exe", ".dll")) and not parts[0].startswith(("-", "/")):
+                    first += r"(?:\.exe)?"
+                rest = r"\s+".join(re.escape(part) for part in parts[1:])
+                regex = re.compile(rf"(?:^|[\s\"'\\/(\[.]){first}\s+{rest}(?=$|[\s\"'();.,:\]])")
             else:
-                regex = re.compile(rf"(?:^|[\s\"'\\/(\[.]){escaped}(?:\.exe)?(?=$|[\s\"'();.\]])")
+                token = re.escape(parts[0])
+                if not parts[0].endswith((".exe", ".dll")):
+                    token += r"(?:\.exe)?"
+                regex = re.compile(rf"(?:^|[\s\"'\\/(\[.]){token}(?=$|[\s\"'();.,:\]])")
             compiled.append((pat, regex))
         return compiled
+
+    # --- Indicator constants & helpers ---
+    _win_fs_apis = None
+
+    _CORE_PARENT_RULES = {
+        "svchost.exe": frozenset({"services.exe"}),
+        "services.exe": frozenset({"wininit.exe"}),
+        "lsass.exe": frozenset({"wininit.exe"}),
+        "lsaiso.exe": frozenset({"wininit.exe"}),
+        "spoolsv.exe": frozenset({"services.exe"}),
+        "smss.exe": frozenset({"system", "smss.exe"}),
+        "taskhostw.exe": frozenset({"svchost.exe"}),
+    }
+
+    _TYPOSQUAT_TARGETS = (
+        "svchost",
+        "lsass",
+        "csrss",
+        "services",
+        "winlogon",
+        "wininit",
+        "explorer",
+        "spoolsv",
+        "taskhostw",
+        "runtimebroker",
+        "smartscreen",
+    )
+
+    _TYPOSQUAT_EXCLUDE = frozenset({
+        "sihost",
+        "dllhost",
+        "conhost",
+        "dashost",
+        "wudfhost",
+        "shellhost",
+        "searchhost",
+        "fontdrvhost",
+    })
+
+    _DOUBLE_EXT_RE = re.compile(
+        r"\.(?:pdf|docx?|xlsx?|pptx?|txt|rtf|jpe?g|png|gif|mp[34]|zip|rar|7z|iso)"
+        r"\.(?:exe|scr|com|pif|bat|cmd|vbs|js|hta)$",
+        re.IGNORECASE,
+    )
+
+    _MOTW_ZONE_RE = re.compile(r"(?im)^\s*ZoneId\s*=\s*([34])\b")
+
+    _STARTUP_EXEC_EXTS = frozenset({
+        ".exe", ".bat", ".cmd", ".vbs", ".js", ".ps1", ".scr", ".com", ".pif", ".hta",
+    })
+
+    _WINLOGON_DEFAULTS = frozenset({
+        "explorer.exe", "explorer", "userinit.exe", "userinit",
+    })
+
+    @staticmethod
+    def _extract_exec_name(cmd_str):
+        if not isinstance(cmd_str, str):
+            return ""
+        s = cmd_str.strip()
+        if not s:
+            return ""
+        m = re.match(r'^(?:"([^"]+)"|\'([^\']+)\'|(.+?\.exe)(?=\s|$)|(\S+))', s, re.IGNORECASE)
+        if not m:
+            return ""
+        token = next((g for g in m.groups() if g), "").strip()
+        return os.path.basename(token).lower() if token else ""
+
+    @classmethod
+    def _get_win_fs_apis(cls):
+        if cls._win_fs_apis is None:
+            kernel32 = ctypes.WinDLL(_system_exe("kernel32.dll"), use_last_error=True)
+
+            get_file_attrs = kernel32.GetFileAttributesW
+            get_file_attrs.argtypes = [wintypes.LPCWSTR]
+            get_file_attrs.restype = wintypes.DWORD
+
+            get_drive_type = kernel32.GetDriveTypeW
+            get_drive_type.argtypes = [wintypes.LPCWSTR]
+            get_drive_type.restype = wintypes.UINT
+
+            cls._win_fs_apis = (get_file_attrs, get_drive_type)
+        return cls._win_fs_apis
+
+    @staticmethod
+    def _levenshtein_distance(a, b):
+        if a == b:
+            return 0
+        if abs(len(a) - len(b)) > 2:
+            return 3
+        prev = list(range(len(b) + 1))
+        for i, ca in enumerate(a, 1):
+            curr = [i] + [0] * len(b)
+            row_min = i
+            for j, cb in enumerate(b, 1):
+                cost = 0 if ca == cb else 1
+                val = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+                curr[j] = val
+                if val < row_min:
+                    row_min = val
+            if row_min > 2:
+                return 3
+            prev = curr
+        return prev[-1]
+
+    @classmethod
+    def _find_typosquat_target(cls, stem):
+        if not stem or stem in cls._TYPOSQUAT_EXCLUDE:
+            return None
+        for target in cls._TYPOSQUAT_TARGETS:
+            max_dist = 1 if len(target) <= 6 else 2
+            dist = cls._levenshtein_distance(stem, target)
+            if 1 <= dist <= max_dist:
+                return f"{target}.exe"
+        return None
+
+    @classmethod
+    def _get_motw_zone(cls, path, cache):
+        key = os.path.normcase(path)
+        if key in cache:
+            return cache[key]
+        zone_id = None
+        try:
+            with open(f"{path}:Zone.Identifier", "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read(4096)
+            m = cls._MOTW_ZONE_RE.search(content)
+            if m:
+                zone_id = m.group(1)
+        except OSError:
+            zone_id = None
+        cache[key] = zone_id
+        return zone_id
+
+    @classmethod
+    def _has_hidden_or_system_attr(cls, path, cache):
+        key = os.path.normcase(path)
+        if key in cache:
+            return cache[key]
+        flagged = False
+        try:
+            get_file_attrs, _ = cls._get_win_fs_apis()
+            attrs = int(get_file_attrs(path))
+            # 0xFFFFFFFF = INVALID_FILE_ATTRIBUTES; 0x2 = HIDDEN; 0x4 = SYSTEM
+            if attrs != 0xFFFFFFFF and (attrs & (0x2 | 0x4)):
+                flagged = True
+        except Exception:
+            flagged = False
+        cache[key] = flagged
+        return flagged
+
+    @classmethod
+    def _is_removable_drive(cls, path, cache):
+        drive, _ = os.path.splitdrive(path)
+        if len(drive) != 2 or drive[1] != ":":
+            return False, ""
+        drive_key = drive.upper()
+        if drive_key not in cache:
+            is_rem = False
+            try:
+                _, get_drive_type = cls._get_win_fs_apis()
+                # 2 = DRIVE_REMOVABLE
+                is_rem = int(get_drive_type(drive_key + "\\")) == 2
+            except Exception:
+                is_rem = False
+            cache[drive_key] = is_rem
+        return cache[drive_key], drive_key
+
+    @classmethod
+    def _preload_ifeo_execs(cls):
+        ifeo_execs = set()
+        ifeo_root = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
+        for access in (
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            winreg.KEY_READ | winreg.KEY_WOW64_32KEY,
+        ):
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, ifeo_root, 0, access) as root_key:
+                    i = 0
+                    while True:
+                        try:
+                            subkey_name = winreg.EnumKey(root_key, i)
+                            i += 1
+                        except OSError:
+                            break
+                        if subkey_name.lower() == "yourimagefilenameherewithoutanyextension":
+                            continue
+                        try:
+                            with winreg.OpenKey(root_key, subkey_name, 0, access) as sub_key:
+                                val, _ = winreg.QueryValueEx(sub_key, "Debugger")
+                                if isinstance(val, str) and val.strip():
+                                    exe_name = cls._extract_exec_name(val)
+                                    if exe_name:
+                                        ifeo_execs.add(exe_name)
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+        return ifeo_execs
+
+    @classmethod
+    def _preload_startup_persistence(cls):
+        startup_folder_execs = set()
+        runonce_execs = set()
+        winlogon_execs = set()
+
+        # 1. RunOnce keys
+        runonce_keys = [
+            (
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                winreg.KEY_READ,
+            ),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                winreg.KEY_READ | winreg.KEY_WOW64_32KEY,
+            ),
+        ]
+        for hive, reg_path, access in runonce_keys:
+            try:
+                with winreg.OpenKey(hive, reg_path, 0, access) as reg_key:
+                    i = 0
+                    while True:
+                        try:
+                            _, value, _ = winreg.EnumValue(reg_key, i)
+                            i += 1
+                            if isinstance(value, str):
+                                exe_name = cls._extract_exec_name(value)
+                                if exe_name:
+                                    runonce_execs.add(exe_name)
+                        except OSError:
+                            break
+            except OSError:
+                continue
+
+        # 2. Winlogon Shell & Userinit (excluding Windows defaults)
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                0,
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ) as wl_key:
+                for val_name in ("Shell", "Userinit"):
+                    try:
+                        val, _ = winreg.QueryValueEx(wl_key, val_name)
+                        if isinstance(val, str):
+                            for part in val.split(","):
+                                exe_name = cls._extract_exec_name(part)
+                                if exe_name and exe_name not in cls._WINLOGON_DEFAULTS:
+                                    winlogon_execs.add(exe_name)
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+
+        # 3. User & Common Startup folders (direct executables and .lnk targets)
+        startup_dirs = []
+        if os.environ.get("APPDATA"):
+            startup_dirs.append(
+                os.path.join(
+                    os.environ["APPDATA"],
+                    r"Microsoft\Windows\Start Menu\Programs\Startup",
+                )
+            )
+        if os.environ.get("ProgramData"):
+            startup_dirs.append(
+                os.path.join(
+                    os.environ["ProgramData"],
+                    r"Microsoft\Windows\Start Menu\Programs\StartUp",
+                )
+            )
+
+        lnk_files = []
+        for sdir in startup_dirs:
+            if not os.path.isdir(sdir):
+                continue
+            try:
+                for entry in os.listdir(sdir):
+                    full_path = os.path.join(sdir, entry)
+                    if not os.path.isfile(full_path):
+                        continue
+                    ext = os.path.splitext(entry)[1].lower()
+                    if ext == ".lnk":
+                        lnk_files.append(full_path)
+                    elif ext in cls._STARTUP_EXEC_EXTS:
+                        startup_folder_execs.add(entry.lower())
+            except OSError:
+                continue
+
+        if lnk_files:
+            com_inited = False
+            try:
+                import pythoncom
+                from win32com.shell import shell
+
+                pythoncom.CoInitialize()
+                com_inited = True
+                for lnk_path in lnk_files:
+                    try:
+                        link = pythoncom.CoCreateInstance(
+                            shell.CLSID_ShellLink,
+                            None,
+                            pythoncom.CLSCTX_INPROC_SERVER,
+                            shell.IID_IShellLink,
+                        )
+                        # 0 = STGM_READ (strictly read-only)
+                        link.QueryInterface(pythoncom.IID_IPersistFile).Load(lnk_path, 0)
+                        target, _ = link.GetPath(shell.SLGP_RAWPATH)
+                        if target:
+                            exe_name = cls._extract_exec_name(target)
+                            if exe_name:
+                                startup_folder_execs.add(exe_name)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            finally:
+                if com_inited:
+                    try:
+                        pythoncom.CoUninitialize()
+                    except Exception:
+                        pass
+
+        return startup_folder_execs, runonce_execs, winlogon_execs
+
+    @classmethod
+    def _preload_wmi_subscription_execs(cls):
+        wmi_execs = set()
+        try:
+            shell32 = ctypes.WinDLL(_system_exe("shell32.dll"), use_last_error=True)
+            if not shell32.IsUserAnAdmin():
+                return wmi_execs
+        except Exception:
+            return wmi_execs
+
+        com_inited = False
+        try:
+            import pythoncom
+            import win32com.client
+
+            pythoncom.CoInitialize()
+            com_inited = True
+            wmi = win32com.client.GetObject(r"winmgmts:\\.\root\subscription")
+            for consumer in wmi.ExecQuery(
+                "SELECT ExecutablePath, CommandLineTemplate FROM CommandLineEventConsumer"
+            ):
+                for attr in ("ExecutablePath", "CommandLineTemplate"):
+                    val = getattr(consumer, attr, None)
+                    if isinstance(val, str) and val.strip():
+                        exe_name = cls._extract_exec_name(val)
+                        if exe_name:
+                            wmi_execs.add(exe_name)
+        except Exception:
+            wmi_execs = set()
+        finally:
+            if com_inited:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+        return wmi_execs
 
     # --- Checks for Suspicious Processes ---
     def check_suspicious_processes(self):
@@ -1864,57 +2613,67 @@ class SuspiciousProcesses:
         except Exception:
             pass
 
-        def _extract_exec_name(cmd_str):
-            if not isinstance(cmd_str, str):
-                return ""
-            s = cmd_str.strip()
-            if not s:
-                return ""
-            m = re.match(r'^(?:"([^"]+)"|\'([^\']+)\'|(.+?\.exe)(?=\s|$)|(\S+))', s, re.IGNORECASE)
-            if not m:
-                return ""
-            token = next((g for g in m.groups() if g), "").strip()
-            return os.path.basename(token).lower() if token else ""
+        _extract_exec_name = self._extract_exec_name
 
         # --- Preload scheduled tasks executables ---
         scheduled_execs = set()
         try:
-            output = subprocess.check_output(
-                [_system_exe("schtasks"), "/query", "/fo", "LIST", "/v"],
-                text=True, encoding='utf-8', errors='ignore',
+            raw_xml = subprocess.check_output(
+                [_system_exe("schtasks"), "/query", "/xml", "ONE"],
+                timeout=10,
                 env=_safe_subproc_env(),
+                stderr=subprocess.DEVNULL,
                 **_subproc_kwargs_hide_window()
             )
-            current_task = {}
-            for line in output.splitlines():
-                line = line.strip()
-                if not line:
-                    if current_task.get("Task To Run"):
-                        exe_name = _extract_exec_name(current_task["Task To Run"])
+            if raw_xml.startswith((b"\xff\xfe", b"\xfe\xff")):
+                xml_text = raw_xml.decode("utf-16", errors="replace")
+            else:
+                try:
+                    xml_text = raw_xml.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    xml_text = raw_xml.decode("mbcs", errors="replace")
+            xml_text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", xml_text)
+            try:
+                root = ET.fromstring(xml_text)
+                for elem in root.iter():
+                    if elem.tag.rsplit("}", 1)[-1] == "Command" and elem.text:
+                        exe_name = _extract_exec_name(elem.text)
                         if exe_name:
                             scheduled_execs.add(exe_name)
-                    current_task = {}
-                    continue
-                if ":" in line:
-                    key, val = line.split(":", 1)
-                    current_task[key.strip()] = val.strip()
-            if current_task.get("Task To Run"):
-                exe_name = _extract_exec_name(current_task["Task To Run"])
-                if exe_name:
-                    scheduled_execs.add(exe_name)
+            except ET.ParseError:
+                for match in re.finditer(
+                    r"<Command\b[^>]*>(.*?)</Command>",
+                    xml_text,
+                    re.IGNORECASE | re.DOTALL,
+                ):
+                    exe_name = _extract_exec_name(html.unescape(match.group(1)))
+                    if exe_name:
+                        scheduled_execs.add(exe_name)
         except Exception:
             scheduled_execs = set()
 
         # --- Preload registry run key executables ---
         registry_execs = set()
         run_keys = [
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run"),
+            (
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                winreg.KEY_READ,
+            ),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            ),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                winreg.KEY_READ | winreg.KEY_WOW64_32KEY,
+            ),
         ]
-        for hive, path in run_keys:
+        for hive, path, access in run_keys:
             try:
-                with winreg.OpenKey(hive, path) as reg_key:
+                with winreg.OpenKey(hive, path, 0, access) as reg_key:
                     i = 0
                     while True:
                         try:
@@ -1930,6 +2689,15 @@ class SuspiciousProcesses:
             except Exception:
                 continue
 
+        # --- Preload IFEO, Startup/RunOnce/Winlogon, and WMI persistence ---
+        ifeo_execs = self._preload_ifeo_execs()
+        startup_folder_execs, runonce_execs, winlogon_execs = self._preload_startup_persistence()
+        wmi_execs = self._preload_wmi_subscription_execs()
+
+        motw_cache = {}
+        hidden_attr_cache = {}
+        drive_type_cache = {}
+
         process_name_counts = {}
 
         for proc in psutil.process_iter(['name']):
@@ -1943,8 +2711,10 @@ class SuspiciousProcesses:
                 continue
 
         # --- Scan running processes ---
+        is_frozen = getattr(sys, "frozen", False)
+        parent_pid = os.getppid() if is_frozen else None
         try:
-            self_path = os.path.normcase(psutil.Process(self_pid).exe())
+            self_path = os.path.normcase(psutil.Process(self_pid).exe()) if is_frozen else None
         except Exception:
             self_path = None
 
@@ -1956,16 +2726,18 @@ class SuspiciousProcesses:
 
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
-                # Skip Secuditor's own process
+                # Skip Secuditor's own process (and its PyInstaller bootloader parent when frozen)
                 if proc.pid == self_pid:
                     continue
 
                 try:
-                    proc_path = os.path.normcase(proc.exe())
+                    path = proc.exe()
+                    proc_path = os.path.normcase(path)
                 except (psutil.AccessDenied, psutil.NoSuchProcess, FileNotFoundError):
+                    path = None
                     proc_path = None
 
-                if self_path and proc_path == self_path:
+                if is_frozen and proc.pid == parent_pid and self_path and proc_path == self_path:
                     continue
 
                 total += 1
@@ -1973,12 +2745,6 @@ class SuspiciousProcesses:
                 cmdline = " ".join(proc.info.get('cmdline') or []).lower()
                 risk = 0
                 reasons = []
-
-                # --- Path ---
-                try:
-                    path = proc.exe()
-                except (psutil.AccessDenied, psutil.NoSuchProcess, FileNotFoundError):
-                    path = None
 
                 normalized_path = os.path.normcase(os.path.abspath(path)) if path else None
 
@@ -2054,18 +2820,62 @@ class SuspiciousProcesses:
                             risk += 20
                             reasons.append(f"Odd parent: {parent_name}")
 
+                        # --- Core Windows parent-tree anomaly ---
+                        expected_parents = self._CORE_PARENT_RULES.get(pname)
+                        if expected_parents and parent_name and parent_name not in expected_parents:
+                            try:
+                                if parent.create_time() <= proc.create_time() + 1.0:
+                                    risk += 20
+                                    reasons.append(f"Unexpected system parent: {parent_name}")
+                            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                                pass
+
                 except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                     pass
 
                 # --- Scheduled task trigger ---
-                if pname in scheduled_execs or strip_extension(pname) in scheduled_execs:
+                pname_stem = strip_extension(pname)
+                if pname in scheduled_execs or pname_stem in scheduled_execs:
                     risk += 10
                     reasons.append("Found in scheduled tasks")
 
                 # --- Registry Run key trigger ---
-                if pname in registry_execs or strip_extension(pname) in registry_execs:
+                if pname in registry_execs or pname_stem in registry_execs:
                     risk += 10
                     reasons.append("Found in registry Run keys")
+
+                # --- Startup folder / RunOnce / Winlogon persistence ---
+                startup_sources = []
+                if pname in startup_folder_execs or pname_stem in startup_folder_execs:
+                    startup_sources.append("Startup")
+                if pname in runonce_execs or pname_stem in runonce_execs:
+                    startup_sources.append("RunOnce")
+                if pname in winlogon_execs or pname_stem in winlogon_execs:
+                    startup_sources.append("Winlogon")
+                if startup_sources:
+                    risk += 10
+                    reasons.append(
+                        f"Found in startup persistence ({', '.join(startup_sources)})"
+                    )
+
+                # --- WMI event subscription persistence ---
+                if pname in wmi_execs or pname_stem in wmi_execs:
+                    risk += 10
+                    reasons.append("Found in WMI event subscription")
+
+                # --- Execution from NTFS Alternate Data Stream (ADS) ---
+                if path:
+                    stripped_ads = path[4:] if path.startswith("\\\\?\\") else path
+                    if len(stripped_ads) > 2 and ":" in stripped_ads[2:]:
+                        risk += 30
+                        reasons.append("Executed from NTFS Alternate Data Stream")
+
+                # --- Execution from removable drive ---
+                if path:
+                    is_removable, rem_drive = self._is_removable_drive(path, drive_type_cache)
+                    if is_removable:
+                        risk += 10
+                        reasons.append(f"Executed from removable drive ({rem_drive})")
 
                 # --- Multiple process instances ---
                 instance_count = process_name_counts.get(pname, 1)
@@ -2078,10 +2888,13 @@ class SuspiciousProcesses:
                     )
 
                 # --- Suspicious child process tracking ---
-                children = proc.children()
-                if len(children) > 3:
-                    risk += 10
-                    reasons.append("Multiple child processes")
+                try:
+                    children = proc.children()
+                    if len(children) > 3:
+                        risk += 10
+                        reasons.append("Multiple child processes")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    pass
 
                 # --- Unexpected network listener binding ---
                 try:
@@ -2121,60 +2934,91 @@ class SuspiciousProcesses:
                     and is_windows_path
                     and self.is_microsoft_signed(path)
                 )
-                if path and not is_verified_system:
+                is_protected_system_no_path = (
+                    not path
+                    and (proc.pid in SPECIAL_SYSTEM_PID or pname in known_system)
+                )
+
+                # --- Deleted / ghost executable on disk ---
+                if (
+                    not is_verified_system
+                    and path
+                    and len(path) >= 3
+                    and path[1] == ":"
+                    and "\\windowsapps\\" not in normalized_path
+                ):
+                    try:
+                        os.stat(path)
+                    except FileNotFoundError:
+                        risk += 30
+                        reasons.append("Deleted executable on disk")
+                    except OSError:
+                        pass
+
+                # --- IFEO Debugger persistence ---
+                if (
+                    not is_verified_system
+                    and (pname in ifeo_execs or pname_stem in ifeo_execs)
+                    and not (path and self.is_microsoft_signed(path))
+                ):
+                    risk += 30
+                    reasons.append("Found in IFEO Debugger persistence")
+
+                if not is_verified_system and not is_protected_system_no_path:
 
                     # --- Digital signature validation ---
                     sig_status = "Unknown"
 
-                    try:
-                        # Normalize path for Windows 10/11 consistency
-                        path_key = os.path.normcase(os.path.realpath(path))
+                    if path:
+                        try:
+                            # Normalize path for Windows 10/11 consistency
+                            path_key = os.path.normcase(os.path.realpath(path))
 
-                        # Cached
-                        if path_key in signature_cache:
-                            sig_status = signature_cache[path_key]
+                            # Cached
+                            if path_key in signature_cache:
+                                sig_status = signature_cache[path_key]
 
-                        # PowerShell validation
-                        else:
-                            try:
-                                sig_status = subprocess.check_output(
-                                    [
-                                        _system_exe("powershell.exe"),
-                                        "-NoProfile",
-                                        "-NonInteractive",
-                                        "-Command",
-                                        "(Get-AuthenticodeSignature -LiteralPath $env:SECUDITOR_SIG_PATH).Status",
-                                    ],
-                                    env=_safe_subproc_env({"SECUDITOR_SIG_PATH": path}),
-                                    text=True,
-                                    timeout=10,
-                                    stderr=subprocess.DEVNULL,
-                                    **_subproc_kwargs_hide_window()
-                                ).strip()
+                            # PowerShell validation
+                            else:
+                                try:
+                                    sig_status = subprocess.check_output(
+                                        [
+                                            _system_exe("powershell.exe"),
+                                            "-NoProfile",
+                                            "-NonInteractive",
+                                            "-Command",
+                                            "(Get-AuthenticodeSignature -LiteralPath $env:SECUDITOR_SIG_PATH).Status",
+                                        ],
+                                        env=_safe_subproc_env({"SECUDITOR_SIG_PATH": path}),
+                                        text=True,
+                                        timeout=10,
+                                        stderr=subprocess.DEVNULL,
+                                        **_subproc_kwargs_hide_window()
+                                    ).strip()
 
-                                if not sig_status:
+                                    if not sig_status:
+                                        sig_status = "Unknown"
+
+                                except Exception:
                                     sig_status = "Unknown"
 
-                            except Exception:
-                                sig_status = "Unknown"
+                                signature_cache[path_key] = sig_status
 
-                            signature_cache[path_key] = sig_status
+                            # Signature scoring
+                            if sig_status == "Valid":
+                                risk -= 10
+                                reasons.append("Valid digital signature")
 
-                        # Signature scoring 
-                        if sig_status == "Valid":
-                            risk -= 10
-                            reasons.append("Valid digital signature")
+                            elif sig_status in ["NotSigned", "HashMismatch", "NotTrusted"]:
+                                risk += 20
+                                reasons.append("Invalid digital signature")
 
-                        elif sig_status in ["NotSigned", "HashMismatch", "NotTrusted"]:
-                            risk += 20
-                            reasons.append("Invalid digital signature")
+                            else:
+                                risk += 10
+                                reasons.append("Unknown signature status")
 
-                        else:
-                            risk += 10
-                            reasons.append(f"Unknown signature status")
-
-                    except Exception:
-                        reasons.append("Signature validation failed")
+                        except Exception:
+                            reasons.append("Signature validation failed")
 
                     # --- Elevated administrator process detection ---
                     try:
@@ -2347,7 +3191,7 @@ class SuspiciousProcesses:
                         )
 
                         recent_clipboard = any(
-                            time.time() - e["timestamp"] < 30
+                            scan_now - e["timestamp"] < 30
                             for e in clipboard_events
                         )
 
@@ -2388,28 +3232,25 @@ class SuspiciousProcesses:
                         pass
 
                     # --- Entropy (inline, fast, safe) ---
-                    try:
-                        with open(path, "rb") as f:
-                            data = f.read(1024 * 1024)
-                        if data:
-                            freq = [0] * 256
-                            length = len(data)
-                            for b in data:
-                                freq[b] += 1
-                            entropy = 0.0
-                            for c in freq:
-                                if c:
-                                    p = c / length
-                                    entropy -= p * math.log2(p)
-                            if (
-                                entropy >= 7.5
-                                and not is_windows_path
-                                and sig_status != "Valid"
-                            ):
-                                risk += 10
-                                reasons.append(f"High entropy ({entropy:.2f})")
-                    except (PermissionError, FileNotFoundError, OSError):
-                        pass
+                    if path and not is_windows_path and sig_status != "Valid":
+                        try:
+                            with open(path, "rb") as f:
+                                data = f.read(1024 * 1024)
+                            if data:
+                                freq = [0] * 256
+                                length = len(data)
+                                for b in data:
+                                    freq[b] += 1
+                                entropy = 0.0
+                                for c in freq:
+                                    if c:
+                                        p = c / length
+                                        entropy -= p * math.log2(p)
+                                if entropy >= 7.5:
+                                    risk += 10
+                                    reasons.append(f"High entropy ({entropy:.2f})")
+                        except (PermissionError, FileNotFoundError, OSError):
+                            pass
 
                     # --- Small executable ---
                     if path:
@@ -2420,14 +3261,33 @@ class SuspiciousProcesses:
                         except (psutil.AccessDenied, FileNotFoundError, OSError):
                             pass
 
-                    # --- Driver usage trigger ---
-                    try:
-                        for sname in self._get_driver_services():
-                            if pname == sname:
-                                risk += 10
-                                reasons.append(f"Driver-backed service: {sname}")
-                    except Exception:
-                        pass
+                    # --- System process typosquatting / double extension ---
+                    if sig_status != "Valid" and not is_windows_path and pname not in known_system:
+                        if self._DOUBLE_EXT_RE.search(pname):
+                            risk += 30
+                            reasons.append("Masqueraded double extension")
+                        else:
+                            typo_target = self._find_typosquat_target(pname_stem)
+                            if typo_target:
+                                risk += 30
+                                reasons.append(
+                                    f"System process typosquatting (similar to {typo_target})"
+                                )
+
+                    # --- Mark-of-the-Web (Zone.Identifier) ---
+                    if path and sig_status != "Valid" and not is_windows_path:
+                        zone_id = self._get_motw_zone(path, motw_cache)
+                        if zone_id in ("3", "4"):
+                            risk += 20
+                            reasons.append(
+                                f"Downloaded executable (Mark-of-the-Web, ZoneId={zone_id})"
+                            )
+
+                    # --- Hidden / system-attributed binary outside Windows ---
+                    if path and sig_status != "Valid" and not is_windows_path:
+                        if self._has_hidden_or_system_attr(path, hidden_attr_cache):
+                            risk += 10
+                            reasons.append("Hidden/system executable attribute")
 
                 # --- LOLBins trigger ---
                 if pname in LOLBINS:
@@ -2485,13 +3345,13 @@ class SuspiciousProcesses:
 
                 if risk >= RISK_THRESHOLD:
                     results.append((
-                    pname,
-                    proc.pid,
-                    risk,
-                    path or "Unknown",
-                    ", ".join(reasons),
-                    True
-                ))
+                        pname,
+                        proc.pid,
+                        risk,
+                        path or "Unknown",
+                        list(reasons),
+                        True,
+                    ))
 
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -2511,6 +3371,59 @@ class SuspiciousProcesses:
         deduped.sort(key=lambda x: -x[2])
         return deduped
 
+    @staticmethod
+    def _risk_tier(risk):
+        if risk >= 90:
+            return "High"
+        if risk >= 60:
+            return "Medium"
+        if risk >= 30:
+            return "Low"
+        return "Very Low"
+
+    @classmethod
+    def _format_suspicious_processes(cls, deduped):
+        """Format detected suspicious processes as Option 3 compact tree cards."""
+        if not deduped:
+            return "No suspicious activity detected"
+
+        tier_order = ("High", "Medium", "Low", "Very Low")
+        tier_counts = {t: 0 for t in tier_order}
+        for _, _, risk, _, _, _ in deduped:
+            tier_counts[cls._risk_tier(risk)] += 1
+
+        summary_parts = [f"{t}: {tier_counts[t]}" for t in tier_order if tier_counts[t] > 0]
+        header = f"Suspicious Processes Detected: {len(deduped)}"
+        if summary_parts:
+            header += f"  ({' | '.join(summary_parts)})"
+
+        sep = "–" * 50
+        lines = ["", header, sep]
+
+        for idx, (name, pid, risk, path, reasons, _flag) in enumerate(deduped):
+            tier = cls._risk_tier(risk)
+            lines.append(f"[ {tier} | Risk {risk} ] {name} (PID: {pid})")
+            lines.append(f"  ├─ Path: {path}")
+            lines.append("  └─ Findings:")
+
+            if isinstance(reasons, str):
+                reason_items = [r.strip() for r in reasons.split(",") if r.strip()]
+            elif isinstance(reasons, (list, tuple)):
+                reason_items = [str(r).strip() for r in reasons if str(r).strip()]
+            else:
+                reason_items = []
+
+            if reason_items:
+                for item in reason_items:
+                    lines.append(f"       • {item}")
+            else:
+                lines.append("       • None")
+
+            if idx != len(deduped) - 1:
+                lines.append(sep)
+
+        return "\n".join(lines)
+
     def show_suspicious_processes(self, run_all_clicked=None, single_check=None):
         cls = type(self)
 
@@ -2527,19 +3440,862 @@ class SuspiciousProcesses:
             return cls._cache
 
         deduped = self.check_suspicious_processes()
+        cls._cache = self._format_suspicious_processes(deduped)
+        return cls._cache
 
-        if not deduped:
-            cls._cache = "No suspicious activity detected"
+
+# ===== Web Browser Scanner =====
+class WebBrowserScanner:
+    """
+    Read-only security, configuration, extension, and privacy/permissions scanner
+    for installed Windows web browsers (Brave, Chrome, Edge, Firefox, Opera, Opera GX, Vivaldi).
+    Never reads saved passwords, cookies, history, or bookmarks.
+    """
+
+    _cache = None
+
+    _OFFICIAL_UPDATE_HOSTS = {
+        "clients2.google.com",
+        "edge.microsoft.com",
+        "addons.mozilla.org",
+        "extension-updates.opera.com",
+        "autoupdate.opera.com",
+        "go-updater.brave.com",
+        "componentupdater.brave.com",
+        "update.vivaldi.com",
+    }
+
+    _CHROMIUM_PERM_LABELS = {
+        "media_stream_camera": "Camera",
+        "media_stream_mic": "Microphone",
+        "geolocation": "Location",
+        "notifications": "Notifications",
+        "clipboard": "Clipboard",
+        "popups": "Pop-ups",
+        "automatic_downloads": "Auto-Downloads",
+        "usb_chooser_data": "USB",
+        "serial_chooser_data": "Serial",
+    }
+
+    _FIREFOX_PERM_LABELS = {
+        "camera": "Camera",
+        "microphone": "Microphone",
+        "geo": "Location",
+        "desktop-notification": "Notifications",
+        "popup": "Pop-ups",
+        "clipboard": "Clipboard",
+    }
+
+    @staticmethod
+    def _is_symlink_or_junction(path_or_entry) -> bool:
+        try:
+            if hasattr(path_or_entry, "is_symlink"):
+                if path_or_entry.is_symlink():
+                    return True
+                is_junc = getattr(path_or_entry, "is_junction", None)
+                if callable(is_junc) and is_junc():
+                    return True
+                st = path_or_entry.stat(follow_symlinks=False)
+            else:
+                if os.path.islink(path_or_entry):
+                    return True
+                is_junc = getattr(os.path, "isjunction", None)
+                if callable(is_junc) and is_junc(path_or_entry):
+                    return True
+                st = os.lstat(path_or_entry)
+            if getattr(st, "st_reparse_tag", 0) in (0xA0000003, 0xA000000C):
+                return True
+        except OSError:
+            return True
+        return False
+
+    @classmethod
+    def _read_json_safe(cls, file_path, max_bytes=8 * 1024 * 1024):
+        if not file_path or cls._is_symlink_or_junction(file_path):
+            return None
+        try:
+            if not os.path.isfile(file_path) or os.path.getsize(file_path) > max_bytes:
+                return None
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fp:
+                data = json.load(fp)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_reg_dict(hive, subkey):
+        values = {}
+        try:
+            with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+                idx = 0
+                while True:
+                    try:
+                        name, val, _ = winreg.EnumValue(k, idx)
+                        values[name] = val
+                        idx += 1
+                    except OSError:
+                        break
+        except OSError:
+            pass
+        return values
+
+    @staticmethod
+    def _read_reg_subkey_values(hive, subkey):
+        items = []
+        try:
+            with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+                idx = 0
+                while True:
+                    try:
+                        _, val, _ = winreg.EnumValue(k, idx)
+                        if isinstance(val, str) and val.strip():
+                            items.append(val.strip())
+                        idx += 1
+                    except OSError:
+                        break
+        except OSError:
+            pass
+        return items
+
+    @staticmethod
+    def _read_reg_subkey_names(hive, subkey):
+        names = []
+        try:
+            with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+                idx = 0
+                while True:
+                    try:
+                        names.append(winreg.EnumKey(k, idx))
+                        idx += 1
+                    except OSError:
+                        break
+        except OSError:
+            pass
+        return names
+
+    @staticmethod
+    def _browser_specs():
+        local_app = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local"
+        )
+        roaming_app = os.environ.get("APPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Roaming"
+        )
+        specs = [
+            {
+                "name": "Brave",
+                "engine": "chromium",
+                "user_data": os.path.join(local_app, "BraveSoftware", "Brave-Browser", "User Data"),
+                "policy_key": r"SOFTWARE\Policies\BraveSoftware\Brave",
+                "ext_reg_key": r"SOFTWARE\BraveSoftware\Brave-Browser\Extensions",
+                "proc_names": {"brave.exe"},
+            },
+            {
+                "name": "Google Chrome",
+                "engine": "chromium",
+                "user_data": os.path.join(local_app, "Google", "Chrome", "User Data"),
+                "policy_key": r"SOFTWARE\Policies\Google\Chrome",
+                "ext_reg_key": r"SOFTWARE\Google\Chrome\Extensions",
+                "proc_names": {"chrome.exe"},
+            },
+            {
+                "name": "Microsoft Edge",
+                "engine": "chromium",
+                "user_data": os.path.join(local_app, "Microsoft", "Edge", "User Data"),
+                "policy_key": r"SOFTWARE\Policies\Microsoft\Edge",
+                "ext_reg_key": r"SOFTWARE\Microsoft\Edge\Extensions",
+                "proc_names": {"msedge.exe"},
+            },
+            {
+                "name": "Mozilla Firefox",
+                "engine": "firefox",
+                "user_data": os.path.join(roaming_app, "Mozilla", "Firefox", "Profiles"),
+                "policy_key": r"SOFTWARE\Policies\Mozilla\Firefox",
+                "ext_reg_key": r"SOFTWARE\Mozilla\Firefox\Extensions",
+                "proc_names": {"firefox.exe"},
+            },
+            {
+                "name": "Opera",
+                "engine": "chromium",
+                "user_data": os.path.join(roaming_app, "Opera Software", "Opera Stable"),
+                "policy_key": r"SOFTWARE\Policies\Opera Software",
+                "ext_reg_key": r"SOFTWARE\Opera Software\Extensions",
+                "proc_names": {"opera.exe"},
+            },
+            {
+                "name": "Opera GX",
+                "engine": "chromium",
+                "user_data": os.path.join(roaming_app, "Opera Software", "Opera GX Stable"),
+                "policy_key": r"SOFTWARE\Policies\Opera Software",
+                "ext_reg_key": r"SOFTWARE\Opera Software\Extensions",
+                "proc_names": {"opera.exe"},
+            },
+            {
+                "name": "Vivaldi",
+                "engine": "chromium",
+                "user_data": os.path.join(local_app, "Vivaldi", "User Data"),
+                "policy_key": r"SOFTWARE\Policies\Vivaldi",
+                "ext_reg_key": r"SOFTWARE\Vivaldi\Extensions",
+                "proc_names": {"vivaldi.exe"},
+            },
+        ]
+        return sorted(specs, key=lambda s: s["name"].lower())
+
+    @classmethod
+    def _collect_running_flags(cls):
+        """Map lowercase process image name -> set of insecure CLI flags observed on running browsers."""
+        flags_by_proc = {}
+        try:
+            for proc in psutil.process_iter(["name", "cmdline"]):
+                try:
+                    pname = (proc.info.get("name") or "").lower()
+                    if not pname:
+                        continue
+                    cmdline = proc.info.get("cmdline") or []
+                    if not cmdline:
+                        continue
+                    matched = set()
+                    for arg in cmdline[1:]:
+                        arg_l = str(arg or "").strip().lower()
+                        for bad_flag in BROWSER_INSECURE_FLAGS:
+                            if arg_l == bad_flag or arg_l.startswith(bad_flag + "="):
+                                matched.add(bad_flag)
+                    if matched:
+                        flags_by_proc.setdefault(pname, set()).update(matched)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    continue
+        except Exception:
+            pass
+        return flags_by_proc
+
+    @classmethod
+    def _discover_chromium_profiles(cls, user_data_dir, max_profiles=10):
+        profiles = []
+        if not user_data_dir or not os.path.isdir(user_data_dir) or cls._is_symlink_or_junction(user_data_dir):
+            return profiles
+
+        # Opera Stable / GX stores Preferences directly in root user_data_dir
+        if os.path.isfile(os.path.join(user_data_dir, "Preferences")):
+            profiles.append((os.path.basename(user_data_dir), user_data_dir))
+            return profiles
+
+        try:
+            with os.scandir(user_data_dir) as entries:
+                candidates = []
+                for entry in entries:
+                    if cls._is_symlink_or_junction(entry):
+                        continue
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    name = entry.name
+                    if name == "Default" or name.startswith("Profile "):
+                        if os.path.isfile(os.path.join(entry.path, "Preferences")):
+                            candidates.append((name, entry.path))
+                candidates.sort(key=lambda x: (0 if x[0] == "Default" else 1, x[0].lower()))
+                profiles.extend(candidates[:max_profiles])
+        except OSError:
+            pass
+        return profiles
+
+    @classmethod
+    def _discover_firefox_profiles(cls, profiles_dir, max_profiles=10):
+        profiles = []
+        if not profiles_dir or not os.path.isdir(profiles_dir) or cls._is_symlink_or_junction(profiles_dir):
+            return profiles
+        try:
+            with os.scandir(profiles_dir) as entries:
+                candidates = []
+                for entry in entries:
+                    if cls._is_symlink_or_junction(entry):
+                        continue
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    has_marker = any(
+                        os.path.isfile(os.path.join(entry.path, f))
+                        for f in ("prefs.js", "extensions.json", "permissions.sqlite")
+                    )
+                    if has_marker:
+                        candidates.append((entry.name, entry.path))
+                candidates.sort(key=lambda x: x[0].lower())
+                profiles.extend(candidates[:max_profiles])
+        except OSError:
+            pass
+        return profiles
+
+    @classmethod
+    def _resolve_manifest_name(cls, ext_dir, raw_name):
+        name = str(raw_name or "").strip()
+        if not name.startswith("__MSG_") or not name.endswith("__"):
+            return name
+        msg_key = name[6:-2]
+        for loc in ("en", "en_US", "en_GB"):
+            msg_data = cls._read_json_safe(os.path.join(ext_dir, "_locales", loc, "messages.json"))
+            if isinstance(msg_data, dict):
+                entry = msg_data.get(msg_key) or msg_data.get(msg_key.lower())
+                if isinstance(entry, dict) and entry.get("message"):
+                    return str(entry["message"]).strip()
+        return name
+
+    @classmethod
+    def _audit_chromium(cls, spec, running_flags):
+        user_data = spec["user_data"]
+        policy_key = spec["policy_key"]
+        ext_reg_key = spec["ext_reg_key"]
+
+        profiles = cls._discover_chromium_profiles(user_data)
+
+        # Read HKLM + HKCU policies
+        policies = {}
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            policies.update(cls._read_reg_dict(hive, policy_key))
+
+        forced_exts = []
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            forced_exts.extend(cls._read_reg_subkey_values(hive, f"{policy_key}\\ExtensionInstallForcelist"))
+            forced_exts.extend(cls._read_reg_subkey_names(hive, ext_reg_key))
+
+        proc_flags = set()
+        for pn in spec["proc_names"]:
+            proc_flags.update(running_flags.get(pn, set()))
+
+        if not profiles and not policies and not forced_exts and not proc_flags:
+            return None
+
+        total_extensions = 0
+        unsigned_or_sideloaded = []
+        suspicious_extensions = []
+        insecure_configs = []
+        perm_counts = {}
+        http_perm_grants = 0
+        privacy_notes = []
+
+        # Policy checks
+        if policies.get("SafeBrowsingEnabled") == 0 or policies.get("SafeBrowsingProtectionLevel") == 0:
+            insecure_configs.append("Safe Browsing disabled by policy")
+        if policies.get("SSLErrorOverrideAllowed") == 1:
+            insecure_configs.append("SSL error override allowed by policy")
+        if policies.get("CommandLineFlagSecurityWarningsEnabled") == 0:
+            insecure_configs.append("CLI security warnings suppressed by policy")
+        if policies.get("AllowOutdatedPlugins") == 1:
+            insecure_configs.append("Outdated plugins allowed by policy")
+        if policies.get("DisableSafeBrowsingProceedAnyway") == 0:
+            insecure_configs.append("Safe Browsing bypass allowed by policy")
+        if forced_exts:
+            insecure_configs.append(f"Policy/Registry forced extensions ({len(set(forced_exts))})")
+
+        seen_ext_keys = set()
+
+        for prof_name, prof_path in profiles:
+            prefs = cls._read_json_safe(os.path.join(prof_path, "Preferences")) or {}
+            sec_prefs = cls._read_json_safe(os.path.join(prof_path, "Secure Preferences")) or {}
+
+            # --- Extensions ---
+            ext_settings = {}
+            for src in (prefs, sec_prefs):
+                es = (src.get("extensions") or {}).get("settings")
+                if isinstance(es, dict):
+                    ext_settings.update(es)
+
+            for ext_id, meta in ext_settings.items():
+                if not isinstance(meta, dict):
+                    continue
+                # Skip disabled or built-in component extensions (location 5=COMPONENT, 10=EXTERNAL_COMPONENT)
+                location = meta.get("location")
+                if location in (5, 10):
+                    continue
+                if meta.get("state") == 0:
+                    continue
+
+                dedup_key = (prof_name, ext_id)
+                if dedup_key in seen_ext_keys:
+                    continue
+                seen_ext_keys.add(dedup_key)
+                total_extensions += 1
+
+                manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
+                ext_rel_path = meta.get("path") or ""
+                ext_abs_dir = None
+                if isinstance(ext_rel_path, str) and ext_rel_path:
+                    if os.path.isabs(ext_rel_path):
+                        ext_abs_dir = ext_rel_path
+                    else:
+                        ext_abs_dir = os.path.join(prof_path, "Extensions", ext_rel_path)
+
+                if not manifest and ext_abs_dir:
+                    manifest = cls._read_json_safe(os.path.join(ext_abs_dir, "manifest.json")) or {}
+
+                raw_name = manifest.get("name") or ext_id
+                ext_name = cls._resolve_manifest_name(ext_abs_dir, raw_name) if ext_abs_dir else str(raw_name)
+                ext_label = ext_name[:32].rstrip(" (-") if ext_name else ext_id[:16]
+
+                # Unsigned / unpacked / sideloaded checks
+                unsigned_reasons = []
+                from_store = meta.get("from_webstore")
+                by_default = meta.get("was_installed_by_default") is True
+                if location == 4:
+                    unsigned_reasons.append("unpacked/dev-mode")
+                elif location == 8:
+                    unsigned_reasons.append("loaded via CLI")
+                elif location in (2, 3, 6, 7, 9) and not (by_default and from_store is True):
+                    unsigned_reasons.append("sideloaded/policy")
+
+                if from_store is False and not unsigned_reasons:
+                    unsigned_reasons.append("non-store")
+
+                update_url = str(manifest.get("update_url") or "").strip()
+                if update_url:
+                    try:
+                        uhost = (urlparse(update_url).hostname or "").lower()
+                        if uhost and uhost not in cls._OFFICIAL_UPDATE_HOSTS:
+                            unsigned_reasons.append(f"external update host ({uhost})")
+                    except Exception:
+                        pass
+
+                if ext_abs_dir and os.path.isdir(ext_abs_dir) and not cls._is_symlink_or_junction(ext_abs_dir):
+                    verified_file = os.path.join(ext_abs_dir, "_metadata", "verified_contents.json")
+                    if not os.path.isfile(verified_file) and from_store is not True and "unpacked/dev-mode" not in unsigned_reasons:
+                        unsigned_reasons.append("no verified_contents.json")
+
+                if unsigned_reasons:
+                    entry_str = f"{ext_label} ({', '.join(unsigned_reasons)})"
+                    if entry_str not in unsigned_or_sideloaded:
+                        unsigned_or_sideloaded.append(entry_str)
+
+                # Suspicious permission checks
+                all_perms = set()
+                for pkey in ("permissions", "host_permissions"):
+                    plist = manifest.get(pkey)
+                    if isinstance(plist, list):
+                        all_perms.update(str(p) for p in plist if isinstance(p, str))
+
+                high_perms = sorted(p for p in all_perms if p in BROWSER_HIGH_RISK_PERMISSIONS)
+                broad_hosts = any(p in BROWSER_BROAD_HOST_PATTERNS for p in all_perms)
+                sus_reasons = []
+                if broad_hosts and high_perms:
+                    sus_reasons.append(f"broad host + {', '.join(high_perms[:3])}")
+                elif len(high_perms) >= 3:
+                    sus_reasons.append(f"high-risk perms: {', '.join(high_perms[:3])}")
+                elif "debugger" in high_perms or "nativeMessaging" in high_perms or "proxy" in high_perms:
+                    sus_reasons.append(f"sensitive API: {', '.join(p for p in high_perms if p in ('debugger', 'nativeMessaging', 'proxy'))}")
+
+                if sus_reasons:
+                    sus_str = f"{ext_label} ({'; '.join(sus_reasons)})"
+                    if sus_str not in suspicious_extensions:
+                        suspicious_extensions.append(sus_str)
+
+            # --- Profile Configuration ---
+            sb = prefs.get("safebrowsing")
+            if isinstance(sb, dict) and sb.get("enabled") is False:
+                msg = f"Safe Browsing disabled ({prof_name})"
+                if msg not in insecure_configs:
+                    insecure_configs.append(msg)
+
+            https_only = prefs.get("https_only_mode_enabled")
+            if https_only is False:
+                note = f"HTTPS-Only Mode: Off ({prof_name})"
+                if note not in privacy_notes:
+                    privacy_notes.append(note)
+
+            # --- Site Permissions (content_settings.exceptions) ---
+            profile_dict = prefs.get("profile") if isinstance(prefs.get("profile"), dict) else {}
+            content_settings = (
+                profile_dict.get("content_settings")
+                if isinstance(profile_dict.get("content_settings"), dict)
+                else {}
+            )
+            exceptions = (
+                content_settings.get("exceptions")
+                if isinstance(content_settings.get("exceptions"), dict)
+                else {}
+            )
+            for key, label in cls._CHROMIUM_PERM_LABELS.items():
+                entries = exceptions.get(key)
+                if not isinstance(entries, dict):
+                    continue
+                for origin, rule in entries.items():
+                    if isinstance(rule, dict) and rule.get("setting") == 1:
+                        perm_counts[label] = perm_counts.get(label, 0) + 1
+                        if str(origin).lower().startswith("http://"):
+                            http_perm_grants += 1
+
+            # --- Privacy Settings ---
+            cookie_mode = profile_dict.get("cookie_controls_mode")
+            block_3p = profile_dict.get("block_third_party_cookies")
+            if cookie_mode == 1 or block_3p is True:
+                p_cookie = "3rd-Party Cookies: Blocked"
+            elif cookie_mode == 2:
+                p_cookie = "3rd-Party Cookies: Blocked in Incognito"
+            else:
+                p_cookie = "3rd-Party Cookies: Allowed"
+            if p_cookie not in privacy_notes:
+                privacy_notes.append(p_cookie)
+
+            if prefs.get("enable_do_not_track") is True:
+                dnt = "Do Not Track: On"
+            else:
+                dnt = "Do Not Track: Off"
+            if dnt not in privacy_notes:
+                privacy_notes.append(dnt)
+
+            if prefs.get("credentials_enable_service") is False:
+                pm = "Password Saving: Disabled"
+            else:
+                pm = "Password Saving: Enabled"
+            if pm not in privacy_notes:
+                privacy_notes.append(pm)
+
+            webrtc = prefs.get("webrtc") if isinstance(prefs.get("webrtc"), dict) else {}
+            webrtc_pol = webrtc.get("ip_handling_policy")
+            if webrtc_pol:
+                w_note = f"WebRTC Policy: {webrtc_pol}"
+                if w_note not in privacy_notes:
+                    privacy_notes.append(w_note)
+
+        return {
+            "name": spec["name"],
+            "profiles": [p[0] for p in profiles],
+            "total_extensions": total_extensions,
+            "unsigned_extensions": unsigned_or_sideloaded,
+            "suspicious_extensions": suspicious_extensions,
+            "insecure_configs": insecure_configs,
+            "running_flags": sorted(proc_flags),
+            "perm_counts": perm_counts,
+            "http_perm_grants": http_perm_grants,
+            "privacy_notes": privacy_notes,
+        }
+
+    @staticmethod
+    def _parse_firefox_prefs_file(file_path, max_bytes=4 * 1024 * 1024):
+        prefs = {}
+        try:
+            if not os.path.isfile(file_path) or os.path.getsize(file_path) > max_bytes:
+                return prefs
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fp:
+                content = fp.read()
+            for match in re.finditer(
+                r'user_pref\(\s*"([^"]+)"\s*,\s*(true|false|-?\d+|"[^"]*")\s*\)',
+                content,
+            ):
+                key, raw_val = match.group(1), match.group(2)
+                if raw_val == "true":
+                    prefs[key] = True
+                elif raw_val == "false":
+                    prefs[key] = False
+                elif raw_val.startswith('"') and raw_val.endswith('"'):
+                    prefs[key] = raw_val[1:-1]
+                else:
+                    try:
+                        prefs[key] = int(raw_val)
+                    except ValueError:
+                        prefs[key] = raw_val
+        except Exception:
+            pass
+        return prefs
+
+    @classmethod
+    def _read_firefox_permissions_sqlite(cls, db_path):
+        """Read Firefox permissions.sqlite strictly in read-only immutable URI mode."""
+        perm_counts = {}
+        http_grants = 0
+        if not db_path or not os.path.isfile(db_path) or cls._is_symlink_or_junction(db_path):
+            return perm_counts, http_grants
+
+        try:
+            abs_path = os.path.abspath(db_path).replace("\\", "/")
+            encoded = quote(abs_path, safe="/:")
+            uri = f"file:///{encoded}?mode=ro&immutable=1"
+            with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=2.0)) as conn:
+                cur = conn.cursor()
+                rows = []
+                for query in (
+                    "SELECT origin, type FROM moz_perms WHERE permission = 1",
+                    "SELECT host, type FROM moz_hosts WHERE permission = 1",
+                ):
+                    try:
+                        rows = cur.execute(query).fetchall()
+                        break
+                    except sqlite3.Error:
+                        continue
+                for origin, ptype in rows:
+                    label = cls._FIREFOX_PERM_LABELS.get(str(ptype or "").lower())
+                    if label:
+                        perm_counts[label] = perm_counts.get(label, 0) + 1
+                        if str(origin or "").lower().startswith("http://"):
+                            http_grants += 1
+        except (sqlite3.Error, OSError):
+            pass
+
+        return perm_counts, http_grants
+
+    @classmethod
+    def _audit_firefox(cls, spec, running_flags):
+        profiles = cls._discover_firefox_profiles(spec["user_data"])
+
+        policies = {}
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            policies.update(cls._read_reg_dict(hive, spec["policy_key"]))
+
+        # Check distribution/policies.json if Firefox is installed in Program Files
+        dist_policies = {}
+        for env_key in ("ProgramFiles", "ProgramFiles(x86)"):
+            pf = os.environ.get(env_key)
+            if pf:
+                pfile = os.path.join(pf, "Mozilla Firefox", "distribution", "policies.json")
+                pdata = cls._read_json_safe(pfile)
+                if isinstance(pdata, dict) and isinstance(pdata.get("policies"), dict):
+                    dist_policies.update(pdata["policies"])
+
+        proc_flags = set()
+        for pn in spec["proc_names"]:
+            proc_flags.update(running_flags.get(pn, set()))
+
+        if not profiles and not policies and not dist_policies and not proc_flags:
+            return None
+
+        total_extensions = 0
+        unsigned_or_sideloaded = []
+        suspicious_extensions = []
+        insecure_configs = []
+        perm_counts = {}
+        http_perm_grants = 0
+        privacy_notes = []
+
+        if policies.get("DisableAppUpdate") == 1 or dist_policies.get("DisableAppUpdate") is True:
+            insecure_configs.append("Browser updates disabled by policy")
+        if policies.get("DisableSafeBrowsing") == 1 or dist_policies.get("DisableSafeBrowsing") is True:
+            insecure_configs.append("Safe Browsing disabled by policy")
+
+        for prof_name, prof_path in profiles:
+            # --- Extensions (extensions.json) ---
+            ext_data = cls._read_json_safe(os.path.join(prof_path, "extensions.json")) or {}
+            addons = ext_data.get("addons")
+            if isinstance(addons, list):
+                for addon in addons:
+                    if not isinstance(addon, dict):
+                        continue
+                    if addon.get("type") != "extension":
+                        continue
+                    if addon.get("active") is False:
+                        continue
+                    loc = str(addon.get("location") or "")
+                    if loc in ("app-builtin", "app-system-defaults"):
+                        continue
+
+                    total_extensions += 1
+                    default_loc = addon.get("defaultLocale") if isinstance(addon.get("defaultLocale"), dict) else {}
+                    ext_name = str(default_loc.get("name") or addon.get("id") or "Unknown")[:32]
+
+                    signed_state = addon.get("signedState")
+                    unsigned_reasons = []
+                    if signed_state == 0:
+                        unsigned_reasons.append("unsigned")
+                    elif signed_state == -1:
+                        unsigned_reasons.append("broken signature")
+                    if loc in ("winreg-app-user", "winreg-app-global"):
+                        unsigned_reasons.append(f"sideloaded ({loc})")
+                    if unsigned_reasons:
+                        unsigned_or_sideloaded.append(f"{ext_name} ({', '.join(unsigned_reasons)})")
+
+                    user_perms = addon.get("userPermissions") if isinstance(addon.get("userPermissions"), dict) else {}
+                    p_list = [str(p) for p in (user_perms.get("permissions") or []) if isinstance(p, str)]
+                    o_list = [str(o) for o in (user_perms.get("origins") or []) if isinstance(o, str)]
+                    high_perms = sorted(p for p in p_list if p in BROWSER_HIGH_RISK_PERMISSIONS)
+                    broad_hosts = any(o in BROWSER_BROAD_HOST_PATTERNS for o in o_list)
+                    sus_reasons = []
+                    if broad_hosts and high_perms:
+                        sus_reasons.append(f"broad host + {', '.join(high_perms[:3])}")
+                    elif len(high_perms) >= 3:
+                        sus_reasons.append(f"high-risk perms: {', '.join(high_perms[:3])}")
+                    elif any(p in ("debugger", "nativeMessaging", "proxy") for p in high_perms):
+                        sus_reasons.append(
+                            f"sensitive API: {', '.join(p for p in high_perms if p in ('debugger', 'nativeMessaging', 'proxy'))}"
+                        )
+                    if sus_reasons:
+                        suspicious_extensions.append(f"{ext_name} ({'; '.join(sus_reasons)})")
+
+            # --- Configuration (prefs.js & user.js) ---
+            prefs = cls._parse_firefox_prefs_file(os.path.join(prof_path, "prefs.js"))
+            user_js_path = os.path.join(prof_path, "user.js")
+            if os.path.isfile(user_js_path) and not cls._is_symlink_or_junction(user_js_path):
+                prefs.update(cls._parse_firefox_prefs_file(user_js_path))
+                insecure_configs.append(f"Custom user.js override present ({prof_name})")
+
+            if prefs.get("xpinstall.signatures.required") is False:
+                insecure_configs.append(f"Extension signature enforcement disabled ({prof_name})")
+            if prefs.get("browser.safebrowsing.malware.enabled") is False:
+                insecure_configs.append(f"Malware Safe Browsing disabled ({prof_name})")
+            if prefs.get("browser.safebrowsing.phishing.enabled") is False:
+                insecure_configs.append(f"Phishing Safe Browsing disabled ({prof_name})")
+
+            # --- Site Permissions (read-only immutable SQLite) ---
+            p_counts, h_grants = cls._read_firefox_permissions_sqlite(
+                os.path.join(prof_path, "permissions.sqlite")
+            )
+            for k, v in p_counts.items():
+                perm_counts[k] = perm_counts.get(k, 0) + v
+            http_perm_grants += h_grants
+
+            # --- Privacy Settings ---
+            cookie_beh = prefs.get("network.cookie.cookieBehavior")
+            if cookie_beh in (1, 4, 5):
+                p_cookie = "3rd-Party Cookies: Blocked / Isolated"
+            elif cookie_beh == 0:
+                p_cookie = "3rd-Party Cookies: Allowed"
+            else:
+                p_cookie = "3rd-Party Cookies: Default (Total Cookie Protection)"
+            if p_cookie not in privacy_notes:
+                privacy_notes.append(p_cookie)
+
+            if prefs.get("dom.security.https_only_mode") is True:
+                h_note = "HTTPS-Only Mode: On"
+            else:
+                h_note = "HTTPS-Only Mode: Off"
+            if h_note not in privacy_notes:
+                privacy_notes.append(h_note)
+
+            if prefs.get("signon.rememberSignons") is False:
+                pm = "Password Saving: Disabled"
+            else:
+                pm = "Password Saving: Enabled"
+            if pm not in privacy_notes:
+                privacy_notes.append(pm)
+
+            if prefs.get("security.enterprise_roots.enabled") is True:
+                er = "Enterprise OS Roots: Enabled"
+                if er not in privacy_notes:
+                    privacy_notes.append(er)
+
+        return {
+            "name": spec["name"],
+            "profiles": [p[0] for p in profiles],
+            "total_extensions": total_extensions,
+            "unsigned_extensions": unsigned_or_sideloaded,
+            "suspicious_extensions": suspicious_extensions,
+            "insecure_configs": insecure_configs,
+            "running_flags": sorted(proc_flags),
+            "perm_counts": perm_counts,
+            "http_perm_grants": http_perm_grants,
+            "privacy_notes": privacy_notes,
+        }
+
+    def scan_web_browsers(self):
+        """Scan all supported installed browsers and return structured findings sorted A-Z."""
+        running_flags = self._collect_running_flags()
+        results = []
+        for spec in self._browser_specs():
+            try:
+                if spec["engine"] == "chromium":
+                    entry = self._audit_chromium(spec, running_flags)
+                else:
+                    entry = self._audit_firefox(spec, running_flags)
+                if entry is not None:
+                    results.append(entry)
+            except Exception:
+                continue
+        results.sort(key=lambda r: r["name"].lower())
+        return results
+
+    @staticmethod
+    def _format_list_preview(items, limit=5):
+        if not items:
+            return "None detected"
+        shown = items[:limit]
+        extra = len(items) - len(shown)
+        text = "; ".join(shown)
+        if extra > 0:
+            text += f" (+{extra} more)"
+        return text
+
+    @staticmethod
+    def _has_attention(browser_entry):
+        return bool(
+            browser_entry.get("unsigned_extensions")
+            or browser_entry.get("suspicious_extensions")
+            or browser_entry.get("insecure_configs")
+            or browser_entry.get("running_flags")
+            or (browser_entry.get("http_perm_grants") or 0) > 0
+        )
+
+    @classmethod
+    def _format_browser_results(cls, results):
+        """Format browser scan results as Option 3 compact tree cards (sorted A-Z)."""
+        if not results:
+            return "\nNo supported web browsers detected."
+
+        sep = " " + ("–" * 98)
+        att_cnt = sum(1 for b in results if cls._has_attention(b))
+        clean_cnt = len(results) - att_cnt
+
+        lines = [
+            "",
+            f" Browsers Scanned: {len(results)}  (Attention: {att_cnt} | Clean: {clean_cnt})",
+            sep,
+        ]
+
+        label_w = 22
+        for idx, b in enumerate(results):
+            has_att = cls._has_attention(b)
+            badge = "Attention" if has_att else "Clean"
+            p_cnt = len(b.get("profiles") or [])
+            e_cnt = int(b.get("total_extensions") or 0)
+            p_word = "profile" if p_cnt == 1 else "profiles"
+            e_word = "extension" if e_cnt == 1 else "extensions"
+
+            lines.append(f" [ {badge} ] {b['name']}  ({p_cnt} {p_word} | {e_cnt} {e_word})")
+
+            if b.get("perm_counts"):
+                perm_summary = ", ".join(
+                    f"{k} ({v})" for k, v in sorted(b["perm_counts"].items())
+                )
+                if (b.get("http_perm_grants") or 0) > 0:
+                    perm_summary += f" [HTTP non-TLS grants: {b['http_perm_grants']}]"
+            else:
+                perm_summary = "None detected"
+
+            priv_summary = " | ".join(b["privacy_notes"]) if b.get("privacy_notes") else "Default / Unknown"
+
+            if has_att:
+                lines.append(
+                    f"   ├─ {'Unsigned / Non-Store':<{label_w}}: {cls._format_list_preview(b['unsigned_extensions'])}"
+                )
+                lines.append(
+                    f"   ├─ {'Suspicious Extensions':<{label_w}}: {cls._format_list_preview(b['suspicious_extensions'])}"
+                )
+                lines.append(
+                    f"   ├─ {'Insecure Config':<{label_w}}: {cls._format_list_preview(b['insecure_configs'])}"
+                )
+                lines.append(
+                    f"   ├─ {'Running Flags':<{label_w}}: {cls._format_list_preview(b['running_flags'])}"
+                )
+                lines.append(f"   ├─ {'Site Permissions':<{label_w}}: {perm_summary}")
+                lines.append(f"   └─ {'Privacy Settings':<{label_w}}: {priv_summary}")
+            else:
+                lines.append(
+                    f"   ├─ {'Security Checks':<{label_w}}: No unsigned/suspicious extensions, insecure policies, or flags"
+                )
+                lines.append(f"   ├─ {'Site Permissions':<{label_w}}: {perm_summary}")
+                lines.append(f"   └─ {'Privacy Settings':<{label_w}}: {priv_summary}")
+
+            if idx != len(results) - 1:
+                lines.append(sep)
+
+        return "\n".join(lines)
+
+    def show_web_browsers(self, run_all_clicked=None, single_check=None):
+        cls = type(self)
+
+        if run_all_clicked is None:
+            run_all_clicked = secuditor_modules.run_all_clicked
+        if single_check is None:
+            single_check = secuditor_modules.single_check
+
+        if (
+            cls._cache is not None
+            and not run_all_clicked
+            and not single_check
+        ):
             return cls._cache
 
-        # --- Output formatting fix only ---
-        lines = [""]
-
-        for name, pid, risk, path, reasons, flag in deduped:
-            lines.append(
-                f"- '{name}', pid: {pid}, path: '{path}', risk: {risk}\n"
-                f"      [findings: {reasons}]\n"
-            )
-
-        cls._cache = "\n    ".join(lines)
+        results = self.scan_web_browsers()
+        cls._cache = self._format_browser_results(results)
         return cls._cache

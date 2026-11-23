@@ -1,14 +1,15 @@
 # Secuditor Lite – Copyright (c) 2026 Menahem Levinski
 
 import requests, json, logging, time, psutil
-import sys, io, re, os, webbrowser
+import sys, io, re, os, posixpath, webbrowser, subprocess
 import socket, ssl, ipaddress, traceback
 import ctypes, types
+from ctypes import wintypes
 import threading
 import tkinter as tk
 
 from tkinter import ttk, scrolledtext, filedialog, messagebox
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from requests.adapters import HTTPAdapter
 from datetime import datetime
 
@@ -19,10 +20,11 @@ from secuditor_utilities import (
     SpeedTest,
     resource_path,
     set_window_icon,
+    attach_native_modal,
     load_oui_database,
 )
 import secuditor_scanners
-from secuditor_scanners import SSLInspection, SensitivePaths, SuspiciousProcesses, SuspiciousProxy
+from secuditor_scanners import SSLInspection, SensitivePaths, SuspiciousProcesses, SuspiciousProxy, WebBrowserScanner
 import secuditor_modules
 from secuditor_modules import (
     get_domain_settings,
@@ -70,11 +72,44 @@ def _is_safe_download_url(url: str) -> bool:
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https":
         return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    try:
+        if parsed.port not in (None, 443):
+            return False
+    except ValueError:
+        return False
+    raw_path = parsed.path or ""
+    decoded_path = unquote(raw_path)
+    decoded_twice = unquote(decoded_path)
+    for candidate in (raw_path, decoded_path, decoded_twice):
+        if "\\" in candidate or ".." in candidate.split("/"):
+            return False
+    norm_path = posixpath.normpath(decoded_path) if decoded_path else "/"
+    norm_lower = norm_path.lower()
     if host in _ALLOWED_DOWNLOAD_HOSTS:
         return True
-    if host == "github.com" and parsed.path.lower().startswith("/secuditor/"):
+    if host == "github.com" and (norm_lower == "/secuditor" or norm_lower.startswith("/secuditor/")):
         return True
     return False
+
+def _parse_version_tuple(version):
+    if not isinstance(version, str):
+        return None
+    parts = [p for p in version.strip().lstrip("vV").split(".") if p]
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+def _is_newer_version(latest, current) -> bool:
+    latest_t = _parse_version_tuple(latest)
+    current_t = _parse_version_tuple(current)
+    if latest_t is None or current_t is None:
+        return False
+    max_len = max(len(latest_t), len(current_t))
+    latest_t = latest_t + (0,) * (max_len - len(latest_t))
+    current_t = current_t + (0,) * (max_len - len(current_t))
+    return latest_t > current_t
 
 class _HybridSSLAdapter(HTTPAdapter):
     """Verify HTTPS against both the OS certificate store and certifi CA bundle."""
@@ -648,8 +683,10 @@ def calculate_score_with_breakdown(data):
             return
 
         ftp = _as_str(remote.get("FTP Service", "Unknown"))
-        if ftp.startswith("Running,"):
+        if ftp.startswith("Running, Potentially Exposed"):
             _set_score("FTP Service", -10, "Fail", "Remote Access", "Exposed", "Med")
+        elif ftp == "Running, No Active Listener":
+            _set_score("FTP Service", 0, "Pass", "Remote Access", "Default", "Med")
         elif ftp.startswith(("Stopped", "Not Detected")):
             _set_score("FTP Service", 0, "Pass", "Remote Access", "Disabled", "Med")
         else:
@@ -795,8 +832,7 @@ class OpSecGUI(tk.Tk):
         
         self.net_status = NetStatus()
         self.speedtest = SpeedTest(self)
-        self.lanscan = LanScanner(self)
-        self.traflow = TrafficFlow(self)
+        self._tool_procs = {}
 
         # Hide the ghost window
         self.withdraw()
@@ -823,12 +859,12 @@ class OpSecGUI(tk.Tk):
 
         # --- Shared state ---
         self.FQDN = socket.getfqdn()
-        self.CURRENT_VERSION = "2.4.0"
+        self.CURRENT_VERSION = "2.4.1"
         self.VERSION_URL = "https://updates.secuditor.com/version.json"
         self.download_url = "https://secuditor.com"
 
         self.latest_version = self.fetch_latest_version()
-        self.version_check = self.latest_version > self.CURRENT_VERSION
+        self.version_check = _is_newer_version(self.latest_version, self.CURRENT_VERSION)
 
         # --- Load icon safely ---
         try:
@@ -884,9 +920,9 @@ class OpSecGUI(tk.Tk):
         self._host_pulse_job = None
         self._welcome_probe_job = None
         self._welcome_probe_busy = False
-        self._welcome_ssl_last_ts = None
+        self._welcome_pwd_last_ts = None
         self._endpoint_status_lines = ["Checking endpoint status..."]
-        self._welcome_ssl_lines = ["  Checking SSL/TLS interception..."]
+        self._welcome_pwd_lines = ["  Checking password policy..."]
         try:
             psutil.cpu_percent(interval=None)
         except Exception:
@@ -896,14 +932,15 @@ class OpSecGUI(tk.Tk):
         # --- window setup ---
         set_window_icon(self)
         self.title(f"Secuditor Lite")
-        self.geometry("1000x720")
+        self.geometry("1024x768")
         self.minsize(900, 600)
         self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self._on_main_close)
 
         # --- Center the window on the screen ---
         self.update_idletasks()  # ensures winfo_width and height are accurate
-        window_width = 1000
-        window_height = 720
+        window_width = 1024
+        window_height = 768
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width // 2) - (window_width // 2)
@@ -966,13 +1003,156 @@ class OpSecGUI(tk.Tk):
     def show_download_speed(self):
         self.speedtest.show_download_speed()
 
+    _ALLOWED_STANDALONE_TOOLS = ("trafficflow", "lanscanner")
+
+    @staticmethod
+    def _find_visible_hwnds_for_pid(pid):
+        """Return visible top-level Win32 HWNDs belonging to a given PID."""
+        hwnds = []
+        if sys.platform != "win32" or not pid:
+            return hwnds
+        try:
+            user32 = ctypes.windll.user32
+            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+            user32.EnumWindows.restype = wintypes.BOOL
+            user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+            user32.IsWindowVisible.argtypes = [wintypes.HWND]
+            user32.IsWindowVisible.restype = wintypes.BOOL
+            user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetWindow.restype = wintypes.HWND
+            GW_OWNER = 4
+
+            def _cb(hwnd, _lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                if user32.GetWindow(hwnd, GW_OWNER):
+                    return True
+                win_pid = wintypes.DWORD(0)
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(win_pid))
+                if int(win_pid.value) == int(pid):
+                    hwnds.append(hwnd)
+                return True
+
+            user32.EnumWindows(WNDENUMPROC(_cb), 0)
+        except Exception:
+            pass
+        return hwnds
+
+    @classmethod
+    def _focus_process_window(cls, pid):
+        """Restore and focus the first visible top-level window for pid."""
+        hwnds = cls._find_visible_hwnds_for_pid(pid)
+        if not hwnds:
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            user32.IsIconic.argtypes = [wintypes.HWND]
+            user32.IsIconic.restype = wintypes.BOOL
+            user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.ShowWindow.restype = wintypes.BOOL
+            user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+            user32.SetForegroundWindow.restype = wintypes.BOOL
+            SW_RESTORE = 9
+            hwnd = hwnds[0]
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def _request_graceful_close_process(cls, proc):
+        """Send WM_CLOSE to a running tool process so it shuts down cleanly without leaving temp files."""
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            hwnds = cls._find_visible_hwnds_for_pid(proc.pid)
+            if not hwnds:
+                return
+            user32 = ctypes.windll.user32
+            user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            user32.PostMessageW.restype = wintypes.BOOL
+            WM_CLOSE = 0x0010
+            for hwnd in hwnds:
+                user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        except Exception:
+            pass
+
+    def _launch_tool_process(self, tool_name):
+        """Spawn TrafficFlow or LanScanner in a separate OS process (single-instance per tool)."""
+        if tool_name not in self._ALLOWED_STANDALONE_TOOLS:
+            return
+
+        existing = self._tool_procs.get(tool_name)
+        if existing is not None and existing.poll() is None:
+            self._focus_process_window(existing.pid)
+            return
+
+        try:
+            self.update_idletasks()
+            target_w = self.winfo_width() or 1024
+            target_h = 500
+            target_x = self.winfo_x()
+            if hasattr(self, "report_output") and self.report_output.winfo_exists():
+                target_y = self.report_output.winfo_rooty() - 4
+            else:
+                target_y = self.winfo_y() + (self.winfo_height() - target_h) // 2
+            parent_geom = f"{target_w}x{target_h}+{target_x}+{target_y}"
+        except tk.TclError:
+            parent_geom = ""
+
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--tool", tool_name]
+        else:
+            cmd = [sys.executable, os.path.abspath(__file__), "--tool", tool_name]
+
+        if parent_geom:
+            cmd.extend(["--parent-geom", parent_geom])
+        if "--debug" in sys.argv:
+            cmd.append("--debug")
+
+        popen_kwargs = {"shell": False, "close_fds": True}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+        try:
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+            self._tool_procs[tool_name] = proc
+        except Exception as e:
+            logging.error("[Tool Launch] Failed to start %s: %s", tool_name, e)
+            messagebox.showerror(
+                "Launch Error",
+                f"Failed to launch {tool_name}: {e}",
+                parent=self,
+            )
+
+    def _on_main_close(self):
+        """Gracefully close open standalone tool processes and shut down the main window."""
+        try:
+            self._stop_host_pulse()
+        except Exception:
+            pass
+        try:
+            self.stop_current_run()
+        except Exception:
+            pass
+        for proc in list(getattr(self, "_tool_procs", {}).values()):
+            self._request_graceful_close_process(proc)
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
     def show_lanscan_run(self):
         print("LAN Discovery function clicked")
-        self.lanscan.run()
+        self._launch_tool_process("lanscanner")
 
     def show_traflow_run(self):
         print("Traffic Flow function clicked")
-        self.traflow.run()
+        self._launch_tool_process("trafficflow")
                 
     def fetch_latest_version(self):
         version = str(self.CURRENT_VERSION)
@@ -990,16 +1170,19 @@ class OpSecGUI(tk.Tk):
             response.raise_for_status()
 
             data = response.json()
-            product_data = data.get("secuditor_lite", {})
+            product_data = data.get("secuditor_lite", {}) if isinstance(data, dict) else {}
+            if not isinstance(product_data, dict):
+                product_data = {}
 
             candidate_url = product_data.get("download_url")
             if _is_safe_download_url(candidate_url):
                 self.download_url = candidate_url.strip()
 
-            latest_version = product_data.get(
-                "latest_version",
-                self.CURRENT_VERSION
-            )
+            raw_latest = product_data.get("latest_version")
+            if isinstance(raw_latest, str) and raw_latest.strip():
+                latest_version = raw_latest.strip()
+            else:
+                latest_version = self.CURRENT_VERSION
 
             print(
                 f"Current version: {self.CURRENT_VERSION}\n"
@@ -1180,7 +1363,7 @@ class OpSecGUI(tk.Tk):
         # Logo
         try:
             logo = tk.PhotoImage(
-                file=resource_path(r"Icons\secuditor_logo.png")
+                file=resource_path(r"icons\secuditor_logo.png")
             )
 
             logo_label = tk.Label(
@@ -1330,10 +1513,7 @@ class OpSecGUI(tk.Tk):
         )
 
         # Make modal
-        about_win.transient(self)
-        about_win.grab_set()
-        about_win.deiconify()
-        about_win.focus_force()
+        attach_native_modal(self, about_win)
 
         self.wait_window(about_win)
 
@@ -1365,18 +1545,13 @@ class OpSecGUI(tk.Tk):
             f"{main_y + (self.winfo_height()//2 - height//2)}"
         )
 
-        update_win.transient(self)
-        update_win.grab_set()
-        update_win.focus_force()
-
         status_label = tk.Label(update_win, text="Checking for updates...")
         status_label.pack(pady=20)
 
         def close_update():
             update_win.destroy()
 
-        update_win.update_idletasks()
-        update_win.deiconify()
+        attach_native_modal(self, update_win)
 
         try:
             if net_status["Connected"]:
@@ -1650,7 +1825,7 @@ class OpSecGUI(tk.Tk):
 
         def load_icon(filename):
             return tk.PhotoImage(
-                file=resource_path(os.path.join("Icons", filename))
+                file=resource_path(os.path.join("icons", filename))
             )
 
         self.speed_icon    = load_icon("speed_icon.png")
@@ -1963,7 +2138,7 @@ class OpSecGUI(tk.Tk):
         self.report_output.tag_config("search_match", background="#FFF59D", foreground="black")
         self.report_output.tag_config("search_current", background="#FFA726", foreground="black")
         self.report_output.config(state="disabled")  # Make read-only
-        right_paned.add(report_frame, minsize=500)
+        right_paned.add(report_frame, minsize=530)
 
         self.report_search_var.trace_add("write", lambda *_: self._refresh_report_search(scroll=True))
         self.report_search_entry.bind("<Return>", self._report_search_next)
@@ -2225,7 +2400,7 @@ class OpSecGUI(tk.Tk):
 
     def _load_tree_icons(self):
         self.tree_icons = {
-            "windows": tk.PhotoImage(file=resource_path("Icons/x_windows.png")),
+            "windows": tk.PhotoImage(file=resource_path("icons/x_windows.png")),
             "computer": tk.PhotoImage(file=resource_path("icons/x_computer.png")),
             "network": tk.PhotoImage(file=resource_path("icons/x_network.png")),
             "security": tk.PhotoImage(file=resource_path("icons/x_security.png")),
@@ -2313,6 +2488,7 @@ class OpSecGUI(tk.Tk):
             ("SSL/TLS_Interception", "SSL/TLS Interception", 'security', lambda: SSLInspection().show_ssl_inspection()),
             ("Scan_Sensitive_Paths", "Scan Sensitive Paths", 'detection', lambda: SensitivePaths().show_sensitive_paths()),
             ("Scan_Suspicious_Activity", "Scan Suspicious Activity", 'detection', lambda: SuspiciousProcesses().show_suspicious_processes()),
+            ("Scan_Web_Browsers", "Scan Web Browsers", 'detection', lambda: WebBrowserScanner().show_web_browsers()),
         ]
 
         # Build tree items per category
@@ -2368,8 +2544,6 @@ class OpSecGUI(tk.Tk):
         
         prompt.title("Security Audit")
         prompt.resizable(False, False)
-        prompt.grab_set()
-        prompt.transient(self)
 
         win_w, win_h = 320, 150
         self.update_idletasks()
@@ -2397,7 +2571,7 @@ class OpSecGUI(tk.Tk):
         tk.Button(btn_frame, text="Yes", width=6, command=yes_action).pack(side="left", padx=10)
         tk.Button(btn_frame, text="No", width=6, command=no_action).pack(side="left", padx=10)
 
-        prompt.deiconify()
+        attach_native_modal(self, prompt)
         self.wait_window(prompt)
 
     # --- Keyboard settings ---
@@ -2565,10 +2739,10 @@ class OpSecGUI(tk.Tk):
 
                 # Configure tags
                 self.report_output.tag_config("bold", font=("Consolas", 10, "bold"))
+                self.report_output.tag_config("pass_green", foreground="darkgreen", font=("Consolas", 10, "bold"))
                 self.report_output.tag_config("fail_red", foreground="red", font=("Consolas", 10, "bold"))
-                self.report_output.tag_config("fail_bg", background="", font=("Consolas", 10))
-                self.report_output.tag_config("detected_purple", foreground="#A855F7", font=("Consolas", 10))
-
+                self.report_output.tag_config("na_gray", foreground="#64748B", font=("Consolas", 10))
+                self.report_output.tag_config("detected_purple", foreground="#A855F7", font=("Consolas", 10, "bold"))
 
                 # Console header
                 self.console_output.config(state="normal")
@@ -2576,35 +2750,42 @@ class OpSecGUI(tk.Tk):
                 self.console_output.insert("1.0", f"{timestamp} Summary Report for {self.FQDN}\n")
                 self.console_output.see("1.0")
 
-                # Insert lines with tags
+                # Clickable jump links for summary rows
                 clickable_checks = {
-                    "Suspicious Activity": "jump_suspicious",
+                    "Network Gateway": "jump_gateway",
+                    "Domain Settings": "jump_domain",
+                    "Password Policy": "jump_password",
+                    "NTLM Configuration": "jump_domain",
                     "Proxy Configuration": "jump_proxy",
                     "SSL/TLS Interception": "jump_ssl",
-                    "Password Policy": "jump_password",
-                    "Domain Settings": "jump_domain",
-                    "Network Gateway": "jump_gateway"
+                    "Suspicious Activity": "jump_suspicious",
                 }
 
                 # Loop over each line in the report
                 for i, line in enumerate(final_text.splitlines(), start=1):
                     self.report_output.insert(f"{i}.0", line + "\n")
+                    stripped_line = line.strip()
 
-                    # Bold headers
-                    if "Security Elements" in line and "Settings" in line:
+                    # Bold executive summary & table headers
+                    if stripped_line.startswith("Summary Report"):
                         self.report_output.tag_add("bold", f"{i}.0", f"{i}.end")
+                        continue
+                    if "Security Element" in line and "Status" in line and "Result" in line:
+                        self.report_output.tag_add("bold", f"{i}.0", f"{i}.end")
+                        continue
 
-                    # Highlight Fail text
-                    if "Fail" in line:
-                        self.report_output.tag_add("fail_bg", f"{i}.0", f"{i}.end")
-                        start_idx = f"{i}.0"
-                        while True:
-                            pos = self.report_output.search("Fail", start_idx, stopindex=f"{i}.end")
-                            if not pos:
-                                break
-                            end_pos = f"{pos}+4c"
-                            self.report_output.tag_add("fail_red", pos, end_pos)
-                            start_idx = end_pos
+                    # Highlight Result column (Pass / Fail / N/A)
+                    res_match = re.search(r"\s{2,}(Pass|Fail|N/A)(?:\s{2,}(?:T\d{4}|–)|\s*$)", line)
+                    if res_match:
+                        res_word = res_match.group(1)
+                        res_start = f"{i}.0+{res_match.start(1)}c"
+                        res_end = f"{i}.0+{res_match.end(1)}c"
+                        if res_word == "Fail":
+                            self.report_output.tag_add("fail_red", res_start, res_end)
+                        elif res_word == "Pass":
+                            self.report_output.tag_add("pass_green", res_start, res_end)
+                        else:
+                            self.report_output.tag_add("na_gray", res_start, res_end)
 
                     # Highlight Detected text in purple
                     if "Detected" in line:
@@ -2613,17 +2794,23 @@ class OpSecGUI(tk.Tk):
                             pos = self.report_output.search("Detected", start_idx, stopindex=f"{i}.end")
                             if not pos:
                                 break
-
                             end_pos = f"{pos}+{len('Detected')}c"
                             self.report_output.tag_add("detected_purple", pos, end_pos)
                             start_idx = end_pos
 
-                    # --- Add clickable links for failed checks dynamically ---
+                    # Add clickable links for security elements
                     for display_name, tag_name in clickable_checks.items():
-                        if display_name in line:
-                            start_idx = f"{i}.0+{line.find(display_name)}c"
+                        if stripped_line.startswith(display_name):
+                            col = line.find(display_name)
+                            start_idx = f"{i}.0+{col}c"
                             end_idx = f"{start_idx}+{len(display_name)}c"
                             self.report_output.tag_add(tag_name, start_idx, end_idx)
+                            break
+
+                self.report_output.tag_raise("pass_green")
+                self.report_output.tag_raise("fail_red")
+                self.report_output.tag_raise("detected_purple")
+                self.report_output.tag_raise(tk.SEL)
                     
             else:
                 # If no report, show welcome banner (ASCII) + live Host Pulse
@@ -2713,23 +2900,41 @@ class OpSecGUI(tk.Tk):
             disk_detail = ""
 
         endpoint_lines = getattr(self, "_endpoint_status_lines", ["Checking endpoint status..."])
-        ssl_lines = getattr(self, "_welcome_ssl_lines", ["  Checking SSL/TLS interception..."])
+        parsed_endpoint_lines = []
+        max_label_len = 0
+        for raw_line in endpoint_lines:
+            text_line = str(raw_line or "").strip()
+            if " is: " in text_line:
+                label_part, status_part = text_line.split(" is: ", 1)
+                label_cut = label_part.strip()[:25]
+                max_label_len = max(max_label_len, len(label_cut))
+                parsed_endpoint_lines.append((label_cut, status_part.strip()))
+            else:
+                parsed_endpoint_lines.append((None, text_line))
+
+        col_width = max_label_len
+        formatted_endpoint_lines = [
+            f"   {label_cut:<{col_width}} – {status_part}" if label_cut is not None else f"   {status_part}"
+            for label_cut, status_part in parsed_endpoint_lines
+        ]
+
+        pwd_lines = getattr(self, "_welcome_pwd_lines", ["  Checking password policy..."])
         lines = [
             " Endpoint Security Status:",
-            " " + "–" * 70,
-            *(f"   {line}" for line in endpoint_lines),
+            " " + "–" * 80,
+            *formatted_endpoint_lines,
             "",
             "",
             f" Operating System: {os_version}",
-            " " + "–" * 70,
+            " " + "–" * 80,
             f"   {'CPU Usage':<18}{self._render_pulse_bar(cpu_pct)} {cpu_pct:5.1f}%",
             f"   {'Memory Usage':<18}{self._render_pulse_bar(mem_pct)} {mem_pct:5.1f}%  {mem_detail}".rstrip(),
             f"   {disk_label:<18}{self._render_pulse_bar(disk_pct)} {disk_pct:5.1f}%  {disk_detail}".rstrip(),
             "",
             "",
-            " SSL/TLS Interception:",
-            " " + "–" * 70,
-            *(f" {line}" if not line.startswith(" ") else line for line in ssl_lines),
+            " Password Policy:",
+            " " + "–" * 80,
+            *(f" {line}" if not line.startswith(" ") else line for line in pwd_lines),
         ]
         return "\n".join(lines)
 
@@ -2741,41 +2946,83 @@ class OpSecGUI(tk.Tk):
         self.report_output.tag_remove("pulse_active", "1.0", tk.END)
         self.report_output.tag_remove("pulse_inactive", "1.0", tk.END)
         self.report_output.tag_remove("pulse_high", "1.0", tk.END)
-        self.report_output.tag_remove("pulse_mitm", "1.0", tk.END)
-        for prefix, word, tag in (
-            ("is: ", "Active", "pulse_active"),
-            ("is: ", "Inactive", "pulse_inactive"),
-            ("", "Untrusted / MITM", "pulse_mitm"),
-        ):
-            token = prefix + word
-            start = ranges[0]
-            while True:
-                pos = self.report_output.search(token, start, stopindex=ranges[1])
-                if not pos:
-                    break
-                word_start = f"{pos}+{len(prefix)}c"
-                word_end = f"{word_start}+{len(word)}c"
-                self.report_output.tag_add(tag, word_start, word_end)
-                start = word_end
+        self.report_output.tag_remove("pulse_pwd_bold", "1.0", tk.END)
+        self.report_output.tag_remove("pulse_pwd_strong", "1.0", tk.END)
+        self.report_output.tag_remove("pulse_pwd_moderate", "1.0", tk.END)
+        self.report_output.tag_remove("pulse_pwd_weak", "1.0", tk.END)
 
         start_line, start_col = (int(x) for x in str(self.report_output.index(ranges[0])).split("."))
         block_text = self.report_output.get(ranges[0], ranges[1])
+        status_re = re.compile(r"^\s{3}\S.{0,24}\s+–\s+(Active|Inactive)\s*$")
+        pwd_status_re = re.compile(
+            r"\(\s*(Strong Policy|Moderate Policy|Hello\s*/\s*PIN|Weak Policy|Unverified Policy)\s*\)"
+        )
+        pwd_weak_suffix_re = re.compile(r"[-–]\s+(Weak Policy)\s*$")
         resource_re = re.compile(
             r"^\s*(?:CPU Usage|Memory Usage|Disk Usage \([^)]+\))\s+\[[█░]+\]\s+((\d+(?:\.\d+)?)%)"
         )
+        in_endpoint_section = False
+        in_pwd_section = False
         for idx, line_text in enumerate(block_text.splitlines()):
+            line_num = start_line + idx
+            col_offset = start_col if idx == 0 else 0
+
+            stripped = line_text.strip()
+            if stripped == "Endpoint Security Status:":
+                in_endpoint_section = True
+                in_pwd_section = False
+                continue
+            if stripped == "Password Policy:":
+                in_endpoint_section = False
+                in_pwd_section = True
+                continue
+            if in_endpoint_section and (not stripped or stripped.startswith("Operating System:")):
+                in_endpoint_section = False
+
+            if in_endpoint_section:
+                st_match = status_re.match(line_text)
+                if st_match:
+                    word = st_match.group(1)
+                    tag = "pulse_active" if word == "Active" else "pulse_inactive"
+                    w_start = f"{line_num}.{col_offset + st_match.start(1)}"
+                    w_end = f"{line_num}.{col_offset + st_match.end(1)}"
+                    self.report_output.tag_add(tag, w_start, w_end)
+                continue
+
+            if in_pwd_section:
+                for pwd_match in pwd_status_re.finditer(line_text):
+                    badge = pwd_match.group(1)
+                    if badge == "Strong Policy":
+                        tag = "pulse_pwd_strong"
+                    elif badge in ("Moderate Policy", "Hello / PIN", "Hello/PIN"):
+                        tag = "pulse_pwd_moderate"
+                    elif badge == "Weak Policy":
+                        tag = "pulse_pwd_weak"
+                    else:
+                        tag = "pulse_pwd_bold"
+                    w_start = f"{line_num}.{col_offset + pwd_match.start(1)}"
+                    w_end = f"{line_num}.{col_offset + pwd_match.end(1)}"
+                    self.report_output.tag_add(tag, w_start, w_end)
+                weak_match = pwd_weak_suffix_re.search(line_text)
+                if weak_match:
+                    w_start = f"{line_num}.{col_offset + weak_match.start(1)}"
+                    w_end = f"{line_num}.{col_offset + weak_match.end(1)}"
+                    self.report_output.tag_add("pulse_pwd_weak", w_start, w_end)
+                continue
+
             match = resource_re.match(line_text)
             if match and float(match.group(2)) >= 90.0:
-                line_num = start_line + idx
-                col_offset = start_col if idx == 0 else 0
                 pct_start = f"{line_num}.{col_offset + match.start(1)}"
                 pct_end = f"{line_num}.{col_offset + match.end(1)}"
                 self.report_output.tag_add("pulse_high", pct_start, pct_end)
 
+        self.report_output.tag_raise("pulse_pwd_bold")
+        self.report_output.tag_raise("pulse_pwd_strong")
+        self.report_output.tag_raise("pulse_pwd_moderate")
+        self.report_output.tag_raise("pulse_pwd_weak")
         self.report_output.tag_raise("pulse_active")
         self.report_output.tag_raise("pulse_inactive")
         self.report_output.tag_raise("pulse_high")
-        self.report_output.tag_raise("pulse_mitm")
         self.report_output.tag_raise(tk.SEL)
 
     def _update_host_pulse_text(self):
@@ -2811,10 +3058,10 @@ class OpSecGUI(tk.Tk):
             return False
 
     _WELCOME_STATUS_INTERVAL_MS = 15000
-    _WELCOME_SSL_INTERVAL_SEC = 60.0
+    _WELCOME_PWD_INTERVAL_SEC = 60.0
 
     def _schedule_welcome_probe(self, delay_ms=_WELCOME_STATUS_INTERVAL_MS):
-        """Schedule the next guarded welcome status refresh (AV/FW 15s, SSL/TLS 60s)."""
+        """Schedule the next guarded welcome status refresh (AV/FW 15s, Password Policy 60s)."""
         job = getattr(self, "_welcome_probe_job", None)
         if job is not None:
             try:
@@ -2834,7 +3081,7 @@ class OpSecGUI(tk.Tk):
             pass
 
     def _on_welcome_probe_timer(self):
-        """Timer callback: refresh AV/FW every 15s and SSL/TLS every 60s while idle on welcome."""
+        """Timer callback: refresh AV/FW every 15s and Password Policy every 60s while idle on welcome."""
         self._welcome_probe_job = None
         try:
             if (
@@ -2853,54 +3100,62 @@ class OpSecGUI(tk.Tk):
 
         self._start_welcome_probe()
 
-    def _finish_welcome_probe(self, endpoint_lines, ssl_lines=None, ssl_checked_at=None):
-        """Apply refreshed AV/FW (and optional SSL) status on the main thread and schedule next 15s cycle."""
+    def _finish_welcome_probe(self, endpoint_lines, pwd_lines=None, pwd_checked_at=None):
+        """Apply refreshed AV/FW (and optional Password Policy) status on the main thread and schedule next 15s cycle."""
         self._welcome_probe_busy = False
         self._endpoint_status_lines = list(endpoint_lines)
-        if ssl_lines is not None:
-            self._welcome_ssl_lines = list(ssl_lines)
-            if ssl_checked_at is not None:
-                self._welcome_ssl_last_ts = ssl_checked_at
+        if pwd_lines is not None:
+            self._welcome_pwd_lines = list(pwd_lines)
+            if pwd_checked_at is not None:
+                self._welcome_pwd_last_ts = pwd_checked_at
         if self._update_host_pulse_text():
             self._schedule_welcome_probe(self._WELCOME_STATUS_INTERVAL_MS)
 
-    def _welcome_probe_worker(self, run_ssl=True):
-        """Background worker collecting AV/FW (15s) and SSL/TLS (60s) without touching audit caches."""
+    def _welcome_probe_worker(self, run_pwd=True):
+        """Background worker collecting AV/FW (15s) and Password Policy (60s) without touching audit caches."""
         try:
             quick = SecuritySettings().get_quick_endpoint_status()
             ep_lines = [quick["av_line"], quick["fw_line"]]
         except Exception:
             ep_lines = ["Antivirus status is: Unknown", "Host-based FW status is: Unknown"]
 
-        ssl_lines = None
-        ssl_checked_at = None
-        if run_ssl:
+        pwd_lines = None
+        pwd_checked_at = None
+        if run_pwd:
             try:
-                res = SSLInspection().check_ssl_inspection("www.google.com", 443, use_cache=False)
-                raw_lines = SSLInspection._format_illustration(res).splitlines()
-                ssl_lines = raw_lines[1:] if len(raw_lines) > 1 else raw_lines
+                pwd_res = PasswordPolicy().get_password_policy_nonadmin(use_cache=False)
+                raw_pwd = PasswordPolicy._format_illustration(pwd_res).splitlines()
+                pwd_lines = raw_pwd[1:] if len(raw_pwd) > 1 else raw_pwd
             except Exception:
-                ssl_lines = ["  [ This Host ] --- X (Handshake Failed) ---> [ www.google.com:443 ]"]
-            ssl_checked_at = time.monotonic()
+                pwd_lines = [
+                    "  [ User Sign-In ] --? ( Unverified Policy ) ?--> [ Local ]",
+                    "                   └─ Policy attributes unavailable (non-admin / unreadable)",
+                ]
+            pwd_checked_at = time.monotonic()
 
         try:
-            self.after(0, lambda e=ep_lines, s=ssl_lines, ts=ssl_checked_at: self._finish_welcome_probe(e, s, ts))
+            self.after(
+                0,
+                lambda e=ep_lines, p=pwd_lines, ts=pwd_checked_at: self._finish_welcome_probe(
+                    e, p, ts
+                ),
+            )
         except (tk.TclError, RuntimeError):
             self._welcome_probe_busy = False
 
     def _start_welcome_probe(self):
-        """Launch non-overlapping background worker for AV/FW (15s) + gated SSL (60s) telemetry."""
+        """Launch non-overlapping background worker for AV/FW (15s) + gated Password Policy (60s) telemetry."""
         if getattr(self, "_welcome_probe_busy", False):
             return
-        last_ssl_ts = getattr(self, "_welcome_ssl_last_ts", None)
-        run_ssl = (
-            last_ssl_ts is None
-            or (time.monotonic() - last_ssl_ts) >= (self._WELCOME_SSL_INTERVAL_SEC - 1.0)
+        last_pwd_ts = getattr(self, "_welcome_pwd_last_ts", None)
+        run_pwd = (
+            last_pwd_ts is None
+            or (time.monotonic() - last_pwd_ts) >= (self._WELCOME_PWD_INTERVAL_SEC - 1.0)
         )
         self._welcome_probe_busy = True
         threading.Thread(
             target=self._welcome_probe_worker,
-            args=(run_ssl,),
+            args=(run_pwd,),
             daemon=True,
             name="Welcome-SecurityProbe",
         ).start()
@@ -2963,14 +3218,17 @@ class OpSecGUI(tk.Tk):
         self.report_output.config(state="normal")
         self.report_output.delete("1.0", tk.END)
 
-        self.report_output.tag_config("bold_ascii", font=("Consolas", 12, "bold"))
+        self.report_output.tag_config("bold_ascii", font=("Consolas", 14, "bold"))
         self.report_output.tag_config("normal_ascii", font=("Consolas", 10))
         self.report_output.tag_config("normal_text", font=("Segoe UI", 10))
         self.report_output.tag_config("host_pulse", font=("Consolas", 10), foreground="#1E293B")
-        self.report_output.tag_config("pulse_active", font=("Consolas", 10), foreground="darkgreen")
-        self.report_output.tag_config("pulse_inactive", font=("Consolas", 10), foreground="red")
+        self.report_output.tag_config("pulse_active", font=("Consolas", 10, "bold"), foreground="darkgreen")
+        self.report_output.tag_config("pulse_inactive", font=("Consolas", 10, "bold"), foreground="red")
         self.report_output.tag_config("pulse_high", font=("Consolas", 10), foreground="darkred")
-        self.report_output.tag_config("pulse_mitm", font=("Consolas", 10), foreground="#A855F7")
+        self.report_output.tag_config("pulse_pwd_bold", font=("Consolas", 10, "bold"), foreground="#1E293B")
+        self.report_output.tag_config("pulse_pwd_strong", font=("Consolas", 10, "bold"), foreground="darkgreen")
+        self.report_output.tag_config("pulse_pwd_moderate", font=("Consolas", 10, "bold"), foreground="#B45309")
+        self.report_output.tag_config("pulse_pwd_weak", font=("Consolas", 10, "bold"), foreground="red")
 
         for line in self.SECUDITOR_LINES:
             self.report_output.insert("end", line + "\n", "bold_ascii")
@@ -3211,6 +3469,7 @@ class OpSecGUI(tk.Tk):
             'Endpoint_Security_Settings': {},
             'Gateway_Discovery': {},
             'Scan_Suspicious_Activity': [],
+            'Scan_Web_Browsers': [],
             'Proxy_Interception': {},
             'SSL/TLS_Interception': [],
         }
@@ -3424,7 +3683,7 @@ class OpSecGUI(tk.Tk):
                             if not self.winfo_exists() or not self.score_frame.winfo_exists():
                                 return
                             if not self.score_frame.winfo_ismapped():
-                                self.score_frame.pack(side="right", padx=(0, 120))
+                                self.score_frame.pack(side="right", padx=(0, 140))
                             for widget in self.score_frame.winfo_children():
                                 widget.destroy()
                             tk.Label(
@@ -3504,39 +3763,32 @@ class OpSecGUI(tk.Tk):
                         severity = assembled["severity_balance"]
                         result = assembled["function_result"]
 
-                    report_lines = []
-                    header = f"{'Security Elements'.ljust(26)} {'Settings'.center(22)} {'Reference'.center(30)} {'Result'.center(16)}"
-                    report_lines.append(header)
-                    report_lines.append("—" * (30 + 25 + 20 + 16))
-
+                    score_rows = []
                     for reason, points in breakdown.items():
-                        reason_result = result.get(reason, "Unknown")
-                        reason_gravity = gravity.get(reason, "Unknown")
-                        reason_severity = severity.get(reason, "Unknown")
-                        reason_config = config.get(reason, "Default")
-                        line = f" - {reason.ljust(26)} {reason_gravity.center(22)} {reason_config.center(28)} {reason_result.center(16)}"
-                        report_lines.append(line)
+                        score_rows.append({
+                            "element": reason,
+                            "status": gravity.get(reason, "Unknown"),
+                            "reference": config.get(reason, "Default"),
+                            "result": result.get(reason, "Unknown"),
+                            "severity": severity.get(reason, "Unknown"),
+                            "points": points,
+                        })
 
-                    if score >= 90:
-                        color = "green"
-                        verdict = ""
-                    elif score >= 70:
-                        color = "limegreen"
-                        verdict = ""
-                    elif score >= 50:
-                        color = "orange"
-                        verdict = ""
-                    elif score >= 30:
-                        color = "brown"
-                        verdict = ""
-                    else:
-                        color = "red"
-                        verdict = ""
+                    report_ts = datetime.now().replace(microsecond=0)
+                    verdict = self._score_rating_label(score)
+                    formatted_summary = self._build_summary_report(
+                        score_rows,
+                        score=score,
+                        hostname=getattr(self, "hostname", hostname),
+                        timestamp=report_ts,
+                        include_banner=True,
+                    )
 
-                    self.data_cache['last_report'] = "\n".join(report_lines)
-                    self.data_cache['security_score'] = score
+                    self.data_cache["score_rows"] = score_rows
+                    self.data_cache["last_report"] = formatted_summary
+                    self.data_cache["security_score"] = score
                     self.data_cache["score_verdict"] = verdict
-                    self.data_cache["report_timestamp"] = datetime.now()
+                    self.data_cache["report_timestamp"] = report_ts
 
                     try:
                         self.after(0, self.update_score_label)
@@ -3635,60 +3887,128 @@ class OpSecGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror("Export Node Error", f"Failed to save node: {e}")
 
+    @staticmethod
+    def _clip_cell(text, width):
+        s = str(text if text is not None else "Unknown").strip()
+        if len(s) <= width:
+            return s
+        return s[: max(1, width - 3)].rstrip() + "..."
+
+    @staticmethod
+    def _score_rating_label(score):
+        if score >= 90:
+            return "Strong"
+        if score >= 70:
+            return "Good"
+        if score >= 50:
+            return "Moderate"
+        if score >= 30:
+            return "Weak"
+        return "Critical"
+
+    _SUMMARY_MITRE_MAP = {
+        "Endpoint Protection": "T1562.001 (Impair Defenses)",
+        "Host-based Firewall": "T1562.004 (Disable Firewall)",
+        "Network Gateway": "T1046 (Network Service Discovery)",
+        "Auto Screen Lock": "T1078.003 (Local Access)",
+        "Elevation Prompt": "T1548.002 (Bypass UAC)",
+        "Memory Integrity": "T1014 (Kernel / Rootkit)",
+        "Boot Security Layer": "T1542.003 (Bootkit)",
+        "System Restore": "T1490 (Inhibit Recovery)",
+        "Disk Encryption": "T1005 (Offline Data Access)",
+        "LAPS Protection": "T1078.003 (Local Admin)",
+        "Credential Guard": "T1003.001 (LSASS Dumping)",
+        "Domain Settings": "–",
+        "Password Policy": "T1110 (Brute Force)",
+        "Bluetooth Component": "T1011.001 (Bluetooth)",
+        "PowerShell Remoting": "T1059.001 (PowerShell)",
+        "RPC Print Spooler": "T1210 (Print Spooler RPC)",
+        "SMBv1 Protocol": "T1210 (SMB Exploit)",
+        "SMBv2 Protocol": "T1021.002 (SMB Shares)",
+        "FTP Service": "T1071.002 (File Transfer Protocol)",
+        "DCOM Service": "T1021.003 (DCOM Remote)",
+        "WinRM Service": "T1021.006 (WinRM Remote)",
+        "Remote Desktop": "T1021.001 (RDP Remote)",
+        "NTLM Configuration": "T1557.001 (NTLM Relay)",
+        "Proxy Configuration": "T1090 (Traffic Proxy)",
+        "SSL/TLS Interception": "T1557 (AiTM / TLS MITM)",
+        "Suspicious Activity": "T1055 (Process Anomaly)",
+    }
+
+    @classmethod
+    def _build_summary_report(cls, rows, score, hostname, timestamp, include_banner=True):
+        """Render the structured summary report (5 columns with MITRE ATT&CK on Fail)."""
+        w_elem, w_stat, w_ref, w_res, w_mitre = 21, 9, 22, 6, 35
+        total_w = w_elem + 2 + w_stat + 2 + w_ref + 2 + w_res + 2 + w_mitre  # 101 chars
+        sep = " " + ("–" * total_w)
+
+        pass_cnt = sum(1 for r in rows if r.get("result") == "Pass")
+        fail_cnt = sum(1 for r in rows if r.get("result") == "Fail")
+        na_cnt = sum(1 for r in rows if r.get("result") == "N/A")
+
+        lines = [""]
+        if include_banner:
+            ts_str = (
+                timestamp.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+                if isinstance(timestamp, datetime)
+                else str(timestamp)
+            )
+            lines.append(
+                f" Summary Report – {hostname}  |  {ts_str}  |  Pass: {pass_cnt}   Fail: {fail_cnt}   N/A: {na_cnt}"
+            )
+            lines.append(sep)
+
+        header = (
+            f" {'Security Element':<{w_elem}}  "
+            f"{'Status':<{w_stat}}  "
+            f"{'Reference':<{w_ref}}  "
+            f"{'Result':<{w_res}}  "
+            f"{'MITRE ATT&CK':<{w_mitre}}"
+        ).rstrip()
+        lines.append(header)
+        lines.append(sep)
+
+        for r in rows:
+            raw_elem = r.get("element", "Unknown")
+            raw_res = r.get("result", "Unknown")
+            elem = cls._clip_cell(raw_elem, w_elem)
+            stat = cls._clip_cell(r.get("status", "Unknown"), w_stat)
+            ref = cls._clip_cell(r.get("reference", "Default"), w_ref)
+            res = cls._clip_cell(raw_res, w_res)
+            mitre_raw = (
+                (r.get("mitre") or cls._SUMMARY_MITRE_MAP.get(raw_elem, "–"))
+                if raw_res == "Fail"
+                else "–"
+            )
+            mitre = cls._clip_cell(mitre_raw, w_mitre)
+            lines.append(
+                f" {elem:<{w_elem}}  {stat:<{w_stat}}  {ref:<{w_ref}}  {res:<{w_res}}  {mitre:<{w_mitre}}".rstrip()
+            )
+
+        return "\n".join(lines)
+
     # --- Generate the score breakdown ---
     def generate_scorebreakdown(self):
-        """ Return the full audit report if it exists, otherwise None. """
+        """Return the formatted summary report if an audit has been run, otherwise None."""
         hostname = getattr(self, "hostname", "Unknown Host")
-        report_text = self.data_cache.get("last_report", "")
+        score_rows = self.data_cache.get("score_rows")
         score = self.data_cache.get("security_score", None)
-        verdict = self.data_cache.get("score_verdict", None)
         timestamp = self.data_cache.get("report_timestamp", datetime.now())
-        
-        if isinstance(timestamp, datetime):
-            timestamp = timestamp.replace(microsecond=0)  # remove .059151
-        else:
-            timestamp = datetime.now().replace(microsecond=0)
 
-        if not report_text or score is None or verdict is None:
+        if score is None:
             return None
 
-        # Use cached timestamp
-        date_str = timestamp.strftime("%Y-%m-%d")
-        time_str = timestamp.strftime("%H:%M:%S")
+        if isinstance(score_rows, list) and score_rows:
+            return self._build_summary_report(
+                score_rows,
+                score=score,
+                hostname=hostname,
+                timestamp=timestamp,
+                include_banner=True,
+            )
 
-        header_lines = [""]
-
-        # Updated table header with Balance column
-        table_header = (
-            f"{'  Security Elements'.ljust(26)}"
-            f"{' Settings'.center(22)}"
-            f"{'Reference'.center(30)}"
-            f"{'Result'.center(16)}"
-        )
-
-        separator = "—" * (30 + 25 + 20 + 16)
-        formatted_lines = header_lines + [table_header, separator]
-
-        for line in report_text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("Security Elements") or stripped.startswith("—"):
-                continue
-
-            # Split line into exactly 5 groups (element, config, gravity, severity, result)
-            parts = re.split(r"\s{2,}", stripped)
-
-            if len(parts) >= 4:
-                element = parts[0].ljust(26)
-                gravity = parts[1].center(22)
-                config = parts[2].center(30)
-                result = parts[3].center(16)
-                formatted_lines.append(f"{element}{gravity}{config}{result}")
-            else:
-                formatted_lines.append(stripped)
-
-        return "\n".join(formatted_lines).rstrip("\n")
+        report_text = self.data_cache.get("last_report", "")
+        return report_text.rstrip("\n") if report_text else None
 
     # --- Generate the TXT report using the new module (with hostname) ---
     def generate_full_txt_report(self, selected_nodes=None):
@@ -3708,8 +4028,6 @@ class OpSecGUI(tk.Tk):
 
             win.title("Report Building")
             win.resizable(False, False)
-            win.grab_set()
-            win.transient(self)
 
             # Update main window dimensions
             self.update_idletasks()
@@ -3721,7 +4039,7 @@ class OpSecGUI(tk.Tk):
 
             # Center over the main window
             panel_width = 280
-            panel_height = main_h - 200
+            panel_height = main_h - 240
 
             x = main_x + (main_w - panel_width) // 2
             y = main_y + (main_h - panel_height) // 2
@@ -3755,7 +4073,7 @@ class OpSecGUI(tk.Tk):
             scrollbar.pack(side="right", fill="y")
 
             for key in self.data_cache.keys():
-                if key in ("last_report", "security_score", "score_verdict", "report_timestamp", "Scan_Sensitive_Paths", "Scan_Suspicious_Activity", "Security_Events", "Windows_Events"):
+                if key in ("last_report", "score_rows", "security_score", "score_verdict", "report_timestamp", "Scan_Sensitive_Paths", "Scan_Suspicious_Activity", "Scan_Web_Browsers", "Security_Events", "Windows_Events"):
                     continue
 
                 var = tk.BooleanVar(value=False)
@@ -3794,7 +4112,7 @@ class OpSecGUI(tk.Tk):
                 font=("Segoe UI", 10)
             ).pack(side="right", padx=(5, 10), pady=10)
 
-            win.deiconify()  # 👈 show ONLY when fully ready
+            attach_native_modal(self, win)  # 👈 show ONLY when fully ready
 
             return
 
@@ -3822,33 +4140,19 @@ class OpSecGUI(tk.Tk):
             )
         lines.extend(header_lines)
 
-        # --- Table header ---
-        table_header = (
-            f"{'  Security Elements'.ljust(26)}"
-            f"{'Settings'.center(22)}"
-            f"{'Reference'.center(30)}"
-            f"{'Result'.center(16)}"
-        )
-        separator = "—" * (30 + 25 + 20 + 16)
-        lines.append(table_header)
-        lines.append(separator)
-
-        # --- Parse table body ---
-        for line in report_text.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("Security Elements") or stripped.startswith("—"):
-                continue
-
-            parts = re.split(r"\s{2,}", stripped)
-
-            if len(parts) >= 4:
-                element_col = parts[0].ljust(26)
-                settings_col = parts[1].center(22)
-                reference_col = parts[2].center(30)
-                result_col = parts[3].center(16)
-                lines.append(f"{element_col}{settings_col}{reference_col}{result_col}")
-            else:
-                lines.append(stripped)
+        # --- Summary table (single source of truth) ---
+        score_rows = self.data_cache.get("score_rows")
+        if isinstance(score_rows, list) and score_rows and score is not None:
+            summary_block = self._build_summary_report(
+                score_rows,
+                score=score,
+                hostname=hostname,
+                timestamp=timestamp,
+                include_banner=True,
+            ).lstrip("\n")
+            lines.extend(summary_block.splitlines())
+        elif report_text:
+            lines.extend(report_text.lstrip("\n").splitlines())
 
         lines.append("")
 
@@ -3937,8 +4241,53 @@ class OpSecGUI(tk.Tk):
         # Call the new full report generator
         self.generate_full_txt_report()
 
+def _parse_standalone_tool_args(argv):
+    """Parse optional --tool <name> and --parent-geom <WxH+X+Y> CLI flags."""
+    tool_name = None
+    parent_geom = None
+    i = 0
+    while i < len(argv):
+        arg = str(argv[i])
+        if arg == "--tool" and i + 1 < len(argv):
+            tool_name = str(argv[i + 1]).strip().lower()
+            i += 2
+            continue
+        if arg.startswith("--tool="):
+            tool_name = arg.split("=", 1)[1].strip().lower()
+            i += 1
+            continue
+        if arg == "--parent-geom" and i + 1 < len(argv):
+            parent_geom = str(argv[i + 1]).strip()
+            i += 2
+            continue
+        if arg.startswith("--parent-geom="):
+            parent_geom = arg.split("=", 1)[1].strip()
+            i += 1
+            continue
+        i += 1
+    return tool_name, parent_geom
+
+
+def _run_standalone_tool(tool_name, parent_geom=None):
+    """Run TrafficFlow or LanScanner in a standalone Tk process (no OpSecGUI root)."""
+    if tool_name == "trafficflow":
+        win = TrafficFlow(parent=None).run(parent_geom=parent_geom)
+        win.mainloop()
+        return 0
+    if tool_name == "lanscanner":
+        # Read-only load from local SQLite OUI cache (avoids concurrent DB writes with parent)
+        load_oui_database()
+        win = LanScanner(parent=None).run(parent_geom=parent_geom)
+        win.mainloop()
+        return 0
+    return 2
+
+
 # ===== MAIN =====
 # --- Run Program ---
 if __name__ == "__main__":
+    _tool_name, _parent_geom = _parse_standalone_tool_args(sys.argv[1:])
+    if _tool_name is not None:
+        sys.exit(_run_standalone_tool(_tool_name, parent_geom=_parent_geom))
     app = OpSecGUI()
     app.mainloop()

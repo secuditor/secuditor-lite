@@ -70,7 +70,7 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are detai
 
 ### Compatible with:
 - Windows 10 / 11
-- Windows Server 2016 / 2019 / 2022
+- Windows Server 2016 / 2019 / 2022 / 2025
 
 ---
 <br>
@@ -112,8 +112,8 @@ Our **[privacy](PRIVACY.md)** and **[security](SECURITY.md)** policies are detai
 ## Getting Started – Windows Release
 
 ### 1️⃣ Download
-- #### [SecuditorLite_2.4.0.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.4.0/SecuditorLite_2.4.0.zip) (21.3 MB)
-- **SHA-256:** 65e1fdfb5e480ebb99f4a00c2498ef54f300bc97b6079a610040050500aca843
+- #### [SecuditorLite_2.4.1.zip](https://github.com/secuditor/secuditor-lite/releases/download/2.4.1/SecuditorLite_2.4.1.zip) (21.8 MB)
+- **SHA-256:** 8f5387e5f62a91aa67f17928cae9854c5cc33417c7e0ed43d9ddbb903571201c
 
 ### 2️⃣ Extract & Run
 - Unzip the file

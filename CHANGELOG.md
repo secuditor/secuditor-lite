@@ -2,8 +2,19 @@
 All notable changes to **Secuditor Lite** are documented in this file.
 
 ---
+## [2.4.1] – 2026-11-23 Latest
+- Added a Cached Credentials check to the Credential Integrity module
+- Added a Windows Hello check to the Password Policy module
+- Added PKU2U Authentication detection to the Remote Access module
+- Added new indicators to the Suspicious Activity scanning module
+- Introduced a Web Browser Scanner as a new detection module
+- Improved Bluetooth remote access security evaluation
+- Increased the application window size to 1024 × 768 (XGA, 4:3)
+- Code cleanup, bug fixes, UI improvements, and performance optimizations
 
-## [2.4.0] – 2026-11-20 Latest
+---
+
+## [2.4.0] – 2026-11-20
 - Added live interception, security and system checks to the home screen
 - Added management port detection to the network gateway analysis
 - Added a proxy detection module to identify potentially suspicious proxies

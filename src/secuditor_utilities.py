@@ -9,6 +9,7 @@ import uuid
 import socket
 import logging
 import platform
+import queue
 import ipaddress
 import subprocess
 import threading
@@ -75,6 +76,116 @@ def set_window_icon(window):
             window.iconphoto(False, photo)
         except Exception:
             pass  # Silent fail if no icon found
+
+# --- Native Windows modal helper (replaces Tk grab_set to prevent minimize/restore deadlocks) ---
+def attach_native_modal(parent, dialog):
+    """
+    Make `dialog` modal over `parent` using native Win32 owner disabling
+    (transient + EnableWindow on GA_ROOT) instead of Tk's grab_set(),
+    preventing Windows minimize/restore (Win+D / taskbar) deadlocks.
+    Falls back to grab_set() on non-Windows platforms.
+    """
+    try:
+        dialog.transient(parent)
+    except tk.TclError:
+        pass
+
+    try:
+        dialog.update_idletasks()
+        dialog.deiconify()
+        dialog.lift()
+        dialog.focus_force()
+    except tk.TclError:
+        return
+
+    if not IS_WINDOWS:
+        try:
+            dialog.grab_set()
+        except tk.TclError:
+            pass
+        return
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL(_system_exe("user32.dll"), use_last_error=True)
+
+        get_ancestor = user32.GetAncestor
+        get_ancestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        get_ancestor.restype = wintypes.HWND
+
+        enable_window = user32.EnableWindow
+        enable_window.argtypes = [wintypes.HWND, wintypes.BOOL]
+        enable_window.restype = wintypes.BOOL
+
+        set_foreground = user32.SetForegroundWindow
+        set_foreground.argtypes = [wintypes.HWND]
+        set_foreground.restype = wintypes.BOOL
+
+        parent.update_idletasks()
+        GA_ROOT = 2
+        parent_hwnd = get_ancestor(int(parent.winfo_id()), GA_ROOT) or int(parent.winfo_id())
+    except Exception:
+        try:
+            dialog.grab_set()
+        except tk.TclError:
+            pass
+        return
+
+    # Ref-count per parent so nested modals cannot re-enable the parent prematurely
+    parent._native_modal_count = getattr(parent, "_native_modal_count", 0) + 1
+    released = [False]
+
+    def _release_parent(restore_focus=True):
+        if released[0]:
+            return
+        released[0] = True
+        remaining = max(getattr(parent, "_native_modal_count", 1) - 1, 0)
+        parent._native_modal_count = remaining
+        if remaining == 0:
+            try:
+                enable_window(parent_hwnd, True)
+            except Exception:
+                pass
+            if restore_focus:
+                try:
+                    if parent.winfo_exists() and parent.state() != "iconic":
+                        parent.lift()
+                        set_foreground(parent_hwnd)
+                        parent.focus_force()
+                except Exception:
+                    pass
+
+    # Wrap dialog.destroy so parent is re-enabled BEFORE the dialog HWND disappears
+    # (prevents Windows from dropping foreground focus to a background window).
+    orig_destroy = dialog.destroy
+
+    def _safe_destroy():
+        _release_parent(restore_focus=True)
+        orig_destroy()
+
+    dialog.destroy = _safe_destroy
+
+    # Route default X-button close through _safe_destroy unless dialog already set a custom handler
+    try:
+        if not dialog.protocol("WM_DELETE_WINDOW"):
+            dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+    except tk.TclError:
+        pass
+
+    # Failsafe if dialog is destroyed via any other path
+    def _on_destroy(event):
+        if event.widget is dialog:
+            _release_parent(restore_focus=True)
+
+    dialog.bind("<Destroy>", _on_destroy, add="+")
+
+    # Disable parent only AFTER dialog is visible and cleanup hooks are armed
+    try:
+        enable_window(parent_hwnd, False)
+    except Exception:
+        _release_parent(restore_focus=False)
 
 def _system_exe(name: str) -> str:
     """Resolve a Windows built-in executable or DLL from System32 to prevent CWD/PATH hijacking."""
@@ -284,16 +395,49 @@ def _bring_window_to_front(win) -> bool:
         pass
     return False
 
-def _create_centered_tool_window(parent, title: str, width: int = 1000, height: int = 500) -> tk.Toplevel:
-    win = tk.Toplevel(parent)
+def _create_centered_tool_window(parent, title: str, width: int = 1024, height: int = 500, parent_geom: Optional[str] = None):
+    if parent is None:
+        win = tk.Tk()
+    else:
+        win = tk.Toplevel(parent)
     win.withdraw()
     set_window_icon(win)
     win.title(title)
     win.resizable(False, False)
 
-    parent.update_idletasks()
-    x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (width // 2) - 8
-    y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (height // 2) - 2
+    win.update_idletasks()
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+
+    if parent is not None:
+        parent.update_idletasks()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        if pw > 0:
+            width = min(pw, sw)
+        x = parent.winfo_x()
+        if hasattr(parent, "report_output") and parent.report_output.winfo_exists():
+            y = parent.report_output.winfo_rooty() - 4
+        else:
+            y = parent.winfo_y() + (ph - height) // 2
+    else:
+        m = re.fullmatch(r"(\d{1,5})x(\d{1,5})([+-]\d{1,5})([+-]\d{1,5})", str(parent_geom or "").strip())
+        if m:
+            pw, ph, px, py = (int(m.group(i)) for i in range(1, 5))
+            if pw > 0:
+                width = min(pw, sw)
+            if ph > 0:
+                height = min(ph, sh)
+            x = px
+            y = py
+        else:
+            width = min(width, sw)
+            x = (sw - width) // 2
+            y = (sh - height) // 2
+
+    x = max(0, min(x, max(0, sw - width)))
+    y = max(0, min(y, max(0, sh - height)))
+
     win.geometry(f"{width}x{height}+{x}+{y}")
     return win
 
@@ -352,6 +496,51 @@ def _create_scrolled_log_text(parent) -> tk.Text:
     txt.bind("<Button-3>", show_context_menu)
     return txt
 
+class _ThreadSafeLogBuffer:
+    """Thread-safe drop-in StringIO buffer for concurrent StreamHandler writes and UI exports."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._buf = io.StringIO()
+
+    def write(self, s: str) -> int:
+        with self._lock:
+            return self._buf.write(s)
+
+    def flush(self):
+        with self._lock:
+            self._buf.flush()
+
+    def getvalue(self) -> str:
+        with self._lock:
+            return self._buf.getvalue()
+
+    def clear(self):
+        with self._lock:
+            self._buf.seek(0)
+            self._buf.truncate(0)
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        with self._lock:
+            return self._buf.seek(pos, whence)
+
+    def truncate(self, size: Optional[int] = None) -> int:
+        with self._lock:
+            return self._buf.truncate(size)
+
+class _QueueTextLogHandler(logging.Handler):
+    """Thread-safe logging handler that pushes formatted lines to a Queue (no Tk calls off-thread)."""
+    def __init__(self, ui_queue: "queue.Queue"):
+        super().__init__()
+        self.ui_queue = ui_queue
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.ui_queue.put(("log", msg))
+        except Exception:
+            pass
+
 class _TextWidgetLogHandler(logging.Handler):
     def __init__(self, txt: tk.Text):
         super().__init__()
@@ -384,7 +573,17 @@ def _attach_text_log_handler(logger, txt: tk.Text, old_handler):
     logger.addHandler(handler)
     return handler
 
-def _export_log_buffer(parent_win, title: str, log_buffer: io.StringIO, handle_errors: bool = False):
+def _close_logger_handlers(logger):
+    if logger is None:
+        return
+    for handler in logger.handlers[:]:
+        try:
+            logger.removeHandler(handler)
+            handler.close()
+        except Exception:
+            pass
+
+def _export_log_buffer(parent_win, title: str, log_buffer, handle_errors: bool = False):
     filename = filedialog.asksaveasfilename(
         parent=parent_win,
         title=title,
@@ -413,7 +612,7 @@ def setup_logger(
     logger_name,
     level=logging.INFO,
     logfile: Optional[str] = None,
-    log_buffer: Optional[io.StringIO] = None
+    log_buffer=None
 ):
     """Create and configure an isolated logger."""
 
@@ -422,12 +621,10 @@ def setup_logger(
     logger.propagate = False
 
     # Remove old handlers belonging to this logger only
-    for handler in logger.handlers[:]:
-        handler.close()
-        logger.removeHandler(handler)
+    _close_logger_handlers(logger)
 
     if logfile:
-        fh = logging.FileHandler(logfile)
+        fh = logging.FileHandler(logfile, encoding="utf-8")
         fh.setFormatter(
             logging.Formatter(
                 "%(asctime)s [%(levelname)s] %(message)s",
@@ -450,7 +647,7 @@ def setup_logger(
 
 # ====== Traffic Flow =======
 class TrafficFlow:
-    def __init__(self, parent):
+    def __init__(self, parent=None):
         self.parent = parent
 
         self.traflow_win = None
@@ -560,10 +757,12 @@ class TrafficFlow:
         ports=None,
         timeout: int = 0,
         skip_time_wait: bool = True,
-        stop_event: Optional[threading.Event] = None
+        stop_event: Optional[threading.Event] = None,
+        logger: Optional[logging.Logger] = None,
     ):
 
         active_stop = stop_event if stop_event is not None else self.stop_event
+        active_logger = logger if logger is not None else self.logger
         ports_set = set(ports) if ports else None
         seen = set()
 
@@ -571,8 +770,8 @@ class TrafficFlow:
         local_ip = local_ip or "0.0.0.0"
         local_subnet = guess_subnet(local_ip, 24)
 
-        self.logger.info("")
-        self.logger.info(
+        active_logger.info("")
+        active_logger.info(
             f"=== Traffic Flow started "
             f"(ports: {ports if ports else 'all'}) ==="
         )
@@ -713,7 +912,7 @@ class TrafficFlow:
                         dst = "*:*"
 
                     # Log
-                    self.logger.info(
+                    active_logger.info(
                         f"[FLOW] {proto} {direction} "
                         f"{proc_name} {src} → {dst} "
                         f"({conn.status})"
@@ -725,7 +924,7 @@ class TrafficFlow:
 
             except Exception as e:
 
-                self.logger.error(
+                active_logger.error(
                     f"[Inspector Error] {e}"
                 )
 
@@ -734,46 +933,64 @@ class TrafficFlow:
                 timeout > 0
                 and (now - start_time) >= timeout
             ):
-                self.logger.info(
+                active_logger.info(
                     "Traffic flow timeout reached."
                 )
                 if active_stop is not None:
                     active_stop.set()
                 break
 
-            time.sleep(interval)
+            if active_stop is not None:
+                active_stop.wait(interval)
+            else:
+                time.sleep(interval)
 
-        self.logger.info(
+        active_logger.info(
             "=== Traffic flow stopped ==="
         )
 
     # Run
-    def run(self):
+    def run(self, parent_geom=None):
 
         if _bring_window_to_front(self.traflow_win):
             return self.traflow_win
-        self.traflow_win = _create_centered_tool_window(self.parent, "Traffic Flow")
+        self.traflow_win = _create_centered_tool_window(self.parent, "Traffic Flow", parent_geom=parent_geom)
         traflow_win = self.traflow_win
 
+        # Signal any previous window's worker to stop without blocking the new session
         if self.stop_event is not None:
             self.stop_event.set()
-        if self.flow_thread and self.flow_thread.is_alive():
-            self.flow_thread.join(timeout=0.5)
 
-        # Logging
+        # Per-window isolated session state (queue, logger, buffer, thread, run_id)
+        session_id = uuid.uuid4().hex[:8]
         log_level, log_file = _parse_log_cli_args()
-        self.log_buffer = io.StringIO()
+        win_log_buffer = _ThreadSafeLogBuffer()
+        self.log_buffer = win_log_buffer
 
-        self.logger = setup_logger(
-            "secuditor.trafficflow",
+        win_logger = setup_logger(
+            f"secuditor.trafficflow.{session_id}",
             level=log_level,
             logfile=log_file,
-            log_buffer=self.log_buffer
+            log_buffer=win_log_buffer,
         )
+        self.logger = win_logger
+
+        ui_queue: "queue.Queue" = queue.Queue()
+        win_text_handler = _QueueTextLogHandler(ui_queue)
+        win_logger.addHandler(win_text_handler)
+        self.text_handler = win_text_handler
 
         win_stop_event = threading.Event()
         self.stop_event = win_stop_event
         self.seen = set()
+
+        win_state = {
+            "thread": None,
+            "run_stop_event": None,
+            "run_id": 0,
+            "closed": False,
+            "poll_job": None,
+        }
 
         # Status
         status_var = tk.StringVar(value="Ready")
@@ -785,9 +1002,8 @@ class TrafficFlow:
 
         # Log window
         txt = _create_scrolled_log_text(traflow_win)
-        self.text_handler = _attach_text_log_handler(self.logger, txt, self.text_handler)
 
-        self.logger.info(
+        win_logger.info(
             "Secuditor Traffic Flow Log"
         )
 
@@ -874,7 +1090,7 @@ class TrafficFlow:
 
             return sorted(ports)
 
-        def flow_worker(ports, run_stop_event):
+        def flow_worker(ports, run_stop_event, run_id):
 
             start_time = time.time()
 
@@ -884,13 +1100,13 @@ class TrafficFlow:
                     get_default_interface_and_ip()
                 )
 
-                self.logger.info("")
+                win_logger.info("")
 
-                self.logger.info(
+                win_logger.info(
                     f"Interface: {interface or 'N/A'}"
                 )
 
-                self.logger.info(
+                win_logger.info(
                     f"Local IP: {local or 'N/A'}"
                 )
 
@@ -903,7 +1119,7 @@ class TrafficFlow:
                             24
                         )
 
-                        self.logger.info(
+                        win_logger.info(
                             f"Detected subnet: {subnet}"
                         )
 
@@ -917,18 +1133,18 @@ class TrafficFlow:
 
                 if ports:
 
-                    self.logger.info(
+                    win_logger.info(
                         f"Port filter: "
                         f"{', '.join(map(str, ports))}"
                     )
 
                 else:
 
-                    self.logger.info(
+                    win_logger.info(
                         "Port filter: All"
                     )
 
-                self.logger.info("")
+                win_logger.info("")
 
                 if run_stop_event.is_set():
                     return
@@ -938,7 +1154,8 @@ class TrafficFlow:
                     ports=ports,
                     timeout=0,
                     skip_time_wait=True,
-                    stop_event=run_stop_event
+                    stop_event=run_stop_event,
+                    logger=win_logger,
                 )
 
             finally:
@@ -948,50 +1165,20 @@ class TrafficFlow:
                     - start_time
                 )
 
-                self.logger.info("")
+                win_logger.info("")
 
-                self.logger.info(
+                win_logger.info(
                     f"Traffic Flow finished in "
                     f"{elapsed:.1f} seconds"
                 )
 
-                def finished():
-
-                    try:
-                        if not traflow_win.winfo_exists():
-                            return
-
-                        if run_stop_event.is_set():
-
-                            status_var.set(
-                                "Stopped"
-                            )
-
-                        else:
-
-                            status_var.set(
-                                "Finished"
-                            )
-
-                        btn_start["state"] = "normal"
-                        btn_stop["state"] = "disabled"
-                        port_entry["state"] = "normal"
-                    except (tk.TclError, RuntimeError):
-                        pass
-
-                try:
-                    traflow_win.after(
-                        0,
-                        finished
-                    )
-                except (tk.TclError, RuntimeError):
-                    pass
+                ui_queue.put(("done", (run_id, run_stop_event.is_set())))
 
         def start_flow():
 
             if (
-                self.flow_thread
-                and self.flow_thread.is_alive()
+                win_state["thread"]
+                and win_state["thread"].is_alive()
             ):
                 return
 
@@ -1004,10 +1191,12 @@ class TrafficFlow:
             txt.delete("1.0", "end")
             txt.config(state="disabled")
 
-            self.log_buffer.seek(0)
-            self.log_buffer.truncate(0)
+            win_log_buffer.clear()
 
             run_stop_event = threading.Event()
+            win_state["run_stop_event"] = run_stop_event
+            win_state["run_id"] += 1
+            current_run_id = win_state["run_id"]
             self.stop_event = run_stop_event
             self.seen.clear()
 
@@ -1019,23 +1208,25 @@ class TrafficFlow:
                 "Traffic flow running..."
             )
 
-            self.flow_thread = threading.Thread(
+            t = threading.Thread(
                 target=flow_worker,
-                args=(ports, run_stop_event),
+                args=(ports, run_stop_event, current_run_id),
                 daemon=True
             )
+            win_state["thread"] = t
+            self.flow_thread = t
 
-            self.flow_thread.start()
+            t.start()
 
         def stop_flow():
 
             if (
-                self.flow_thread
-                and self.flow_thread.is_alive()
+                win_state["thread"]
+                and win_state["thread"].is_alive()
             ):
 
-                if self.stop_event is not None:
-                    self.stop_event.set()
+                if win_state["run_stop_event"] is not None:
+                    win_state["run_stop_event"].set()
 
                 try:
                     if traflow_win.winfo_exists():
@@ -1044,7 +1235,7 @@ class TrafficFlow:
                 except tk.TclError:
                     pass
 
-                self.logger.warning(
+                win_logger.warning(
                     "Stop requested..."
                 )
 
@@ -1052,7 +1243,7 @@ class TrafficFlow:
             _export_log_buffer(
                 traflow_win,
                 "Export Traffic Flow Log",
-                self.log_buffer,
+                win_log_buffer,
                 handle_errors=True
             )
 
@@ -1102,28 +1293,82 @@ class TrafficFlow:
             padx=5
         )
 
+        # Main-thread UI queue poller (drains logs FIFO before applying done state)
+        def drain_ui_queue():
+            if win_state["closed"]:
+                return
+            try:
+                if not traflow_win.winfo_exists():
+                    win_state["closed"] = True
+                    return
+
+                log_batch = []
+                done_payload = None
+                while True:
+                    try:
+                        kind, payload = ui_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if kind == "log":
+                        log_batch.append(payload)
+                    elif kind == "done":
+                        done_payload = payload
+
+                if log_batch:
+                    txt.config(state="normal")
+                    txt.insert("end", "\n".join(log_batch) + "\n")
+                    txt.see("end")
+                    txt.config(state="disabled")
+
+                if done_payload is not None:
+                    finished_run_id, was_stopped = done_payload
+                    if finished_run_id == win_state["run_id"]:
+                        status_var.set("Stopped" if was_stopped else "Finished")
+                        btn_start["state"] = "normal"
+                        btn_stop["state"] = "disabled"
+                        port_entry["state"] = "normal"
+
+                win_state["poll_job"] = traflow_win.after(40, drain_ui_queue)
+            except (tk.TclError, RuntimeError):
+                win_state["closed"] = True
+
         # Close
         def on_close():
+            if win_state["closed"]:
+                return
+            win_state["closed"] = True
 
-            if self.stop_event is not None:
-                self.stop_event.set()
+            if win_state["poll_job"] is not None:
+                try:
+                    traflow_win.after_cancel(win_state["poll_job"])
+                except (tk.TclError, RuntimeError):
+                    pass
+                win_state["poll_job"] = None
 
-            if self.text_handler:
+            win_stop_event.set()
+            if win_state["run_stop_event"] is not None:
+                win_state["run_stop_event"].set()
 
-                self.logger.removeHandler(
-                    self.text_handler
-                )
-
+            _close_logger_handlers(win_logger)
+            if self.text_handler is win_text_handler:
                 self.text_handler = None
 
-            self.traflow_win = None
+            if self.traflow_win is traflow_win:
+                self.traflow_win = None
 
-            traflow_win.destroy()
+            try:
+                if traflow_win.winfo_exists():
+                    traflow_win.destroy()
+            except (tk.TclError, RuntimeError):
+                pass
 
         traflow_win.protocol(
             "WM_DELETE_WINDOW",
             on_close
         )
+        traflow_win.bind("<Destroy>", lambda e: on_close() if e.widget is traflow_win else None)
+
+        win_state["poll_job"] = traflow_win.after(40, drain_ui_queue)
 
         # Show window
         traflow_win.deiconify()
@@ -1155,7 +1400,7 @@ class LanScanner:
     _TABLE_HEADERS = ["IP Address", "Vendor", "MAC", "Alive", "Open Ports"]
     _TABLE_COL_WIDTHS = [15, 26, 20, 10, 40]
 
-    def __init__(self, parent):
+    def __init__(self, parent=None):
         self.parent = parent
 
         self.lan_win = None
@@ -1314,7 +1559,8 @@ class LanScanner:
                         except Exception:
                             pass
         finally:
-            ex.shutdown(wait=not self._scan_stopped(stop_event))
+            stopped = self._scan_stopped(stop_event)
+            ex.shutdown(wait=not stopped, cancel_futures=stopped)
 
         return sorted(open_ports)
 
@@ -1373,6 +1619,7 @@ class LanScanner:
         arp_lock = threading.Lock()
         last_arp_refresh = [time.monotonic()]
         ping_sem = threading.Semaphore(64)
+        port_scan_sem = threading.Semaphore(6)
 
         emitted_ips = set()
         emitted_lock = threading.Lock()
@@ -1381,13 +1628,16 @@ class LanScanner:
 
         def _emit(device: dict):
             with emitted_lock:
+                if self._scan_stopped(stop_event):
+                    return
                 if device["ip"] in emitted_ips:
                     return
                 emitted_ips.add(device["ip"])
                 devices.append(device)
             if on_device:
                 with callback_lock:
-                    on_device(device)
+                    if not self._scan_stopped(stop_event):
+                        on_device(device)
 
         def _get_mac(ip: str) -> Optional[str]:
             with arp_lock:
@@ -1439,7 +1689,11 @@ class LanScanner:
 
             alive = tcp_alive or ping_alive
 
-            open_ports = self._scan_ports(ip, ports, port_timeout, 64, stop_event=stop_event) if do_port_scan else []
+            open_ports = []
+            if do_port_scan:
+                with port_scan_sem:
+                    if not self._scan_stopped(stop_event):
+                        open_ports = self._scan_ports(ip, ports, port_timeout, 32, stop_event=stop_event)
             if self._scan_stopped(stop_event):
                 return
 
@@ -1468,10 +1722,13 @@ class LanScanner:
                 except Exception:
                     pass
         finally:
-            ex.shutdown(wait=not self._scan_stopped(stop_event))
+            stopped = self._scan_stopped(stop_event)
+            ex.shutdown(wait=not stopped, cancel_futures=stopped)
 
         if self._scan_stopped(stop_event):
-            return sorted(devices, key=lambda x: socket.inet_aton(x["ip"]))
+            with emitted_lock:
+                snapshot = list(devices)
+            return sorted(snapshot, key=lambda x: socket.inet_aton(x["ip"]))
 
         # ---- Include ARP-only hosts (TCP/ICMP-blocked / firewalled) ----
         if include_arp_only and subnet is not None:
@@ -1523,9 +1780,12 @@ class LanScanner:
                         except Exception:
                             pass
                 finally:
-                    arp_ex.shutdown(wait=not self._scan_stopped(stop_event))
+                    stopped = self._scan_stopped(stop_event)
+                    arp_ex.shutdown(wait=not stopped, cancel_futures=stopped)
 
-        return sorted(devices, key=lambda x: socket.inet_aton(x["ip"]))
+        with emitted_lock:
+            snapshot = list(devices)
+        return sorted(snapshot, key=lambda x: socket.inet_aton(x["ip"]))
 
     def discover_network(
         self,
@@ -1598,14 +1858,15 @@ class LanScanner:
     def _trim_col(s: str, w: int) -> str:
         return (s[: w - 3] + "...") if len(s) > w else s
 
-    def _print_table_header(self) -> str:
+    def _print_table_header(self, logger: Optional[logging.Logger] = None) -> str:
+        active_logger = logger if logger is not None else self.logger
         header_line = "  ".join(
             h.center(w) for h, w in zip(self._TABLE_HEADERS, self._TABLE_COL_WIDTHS)
         )
         sep_line = "–" * len(header_line)
-        self.logger.info(sep_line)
-        self.logger.info(header_line)
-        self.logger.info(sep_line)
+        active_logger.info(sep_line)
+        active_logger.info(header_line)
+        active_logger.info(sep_line)
         return sep_line
 
     def _format_device_row(self, d: dict) -> str:
@@ -1635,8 +1896,10 @@ class LanScanner:
         on_device=None,
         stop_event: Optional[threading.Event] = None,
         extra_ips: Optional[Iterable[str]] = None,
+        logger: Optional[logging.Logger] = None,
     ) -> list:
 
+        active_logger = logger if logger is not None else self.logger
         extra_list = list(extra_ips) if extra_ips else None
 
         if subnet is None and local_ip and not extra_list:
@@ -1653,10 +1916,10 @@ class LanScanner:
                 extra_ips=extra_list,
             )
 
-        self.logger.info("")
-        self.logger.info(f"Scanning local network...")
-        self.logger.info("")
-        sep_line = self._print_table_header()
+        active_logger.info("")
+        active_logger.info(f"Scanning local network...")
+        active_logger.info("")
+        sep_line = self._print_table_header(logger=active_logger)
 
         seen_ips = set()
         print_lock = threading.Lock()
@@ -1664,10 +1927,12 @@ class LanScanner:
         def _stream_device(d: dict):
             ip = d["ip"]
             with print_lock:
+                if self._scan_stopped(stop_event):
+                    return
                 if ip in seen_ips:
                     return
                 seen_ips.add(ip)
-                self.logger.info(self._format_device_row(d))
+                active_logger.info(self._format_device_row(d))
             if on_device:
                 on_device(d)
 
@@ -1683,10 +1948,10 @@ class LanScanner:
                 extra_ips=extra_list,
             )
         finally:
-            self.logger.info(sep_line)
+            active_logger.info(sep_line)
             if self._scan_stopped(stop_event):
-                self.logger.info("Scan stopped.")
-            self.logger.info(f"Found {len(seen_ips)} devices")
+                active_logger.info("Scan stopped.")
+            active_logger.info(f"Found {len(seen_ips)} devices")
 
         return devices
 
@@ -1812,37 +2077,51 @@ class LanScanner:
             "apipa": apipa,
         }
 
-    def run(self):
+    def run(self, parent_geom=None):
 
         # If the window is already open, bring it to the front
         if _bring_window_to_front(self.lan_win):
             return self.lan_win
 
         # Create hidden window
-        self.lan_win = _create_centered_tool_window(self.parent, "LAN Discovery")
+        self.lan_win = _create_centered_tool_window(self.parent, "LAN Discovery", parent_geom=parent_geom)
         lanscan_win = self.lan_win
 
+        # Signal any previous window's scan to stop without blocking the new session
         if self.stop_event is not None:
             self.stop_event.set()
-        if self.scan_thread and self.scan_thread.is_alive():
-            self.scan_thread.join(timeout=0.3)
 
-        # Logging
+        # Per-window isolated session state (queue, logger, buffer, thread, run_id)
+        session_id = uuid.uuid4().hex[:8]
         log_level, log_file = _parse_log_cli_args()
 
-        # Fresh log buffer for this scan session
-        self.log_buffer = io.StringIO()
+        win_log_buffer = _ThreadSafeLogBuffer()
+        self.log_buffer = win_log_buffer
 
-        self.logger = setup_logger(
-            "secuditor.lanscan",
+        win_logger = setup_logger(
+            f"secuditor.lanscan.{session_id}",
             level=log_level,
             logfile=log_file,
-            log_buffer=self.log_buffer
+            log_buffer=win_log_buffer,
         )
+        self.logger = win_logger
 
-        # Variables
-        self.stop_event = threading.Event()
+        ui_queue: "queue.Queue" = queue.Queue()
+        win_text_handler = _QueueTextLogHandler(ui_queue)
+        win_logger.addHandler(win_text_handler)
+        self.text_handler = win_text_handler
+
+        win_stop_event = threading.Event()
+        self.stop_event = win_stop_event
         self.scan_results = []
+
+        win_state = {
+            "thread": None,
+            "run_stop_event": None,
+            "run_id": 0,
+            "closed": False,
+            "poll_job": None,
+        }
 
         # Status
         status_var = tk.StringVar(value="Ready")
@@ -1862,12 +2141,11 @@ class LanScanner:
 
         # --- Read-only Log window ---
         txt = _create_scrolled_log_text(lanscan_win)
-        self.text_handler = _attach_text_log_handler(self.logger, txt, self.text_handler)
 
-        self.logger.info("Secuditor Network Discovery Log")
+        win_logger.info("Secuditor Network Discovery Log")
 
         # Worker
-        def scan_worker(run_stop_event):
+        def scan_worker(run_stop_event, run_id):
 
             start_time = time.time()
 
@@ -1881,44 +2159,44 @@ class LanScanner:
                 extra_ips = target["extra_ips"]
                 gw_ips = target["gw_ips"]
 
-                self.logger.info("")
-                self.logger.info(f"Interface: {interface or 'N/A'}")
-                self.logger.info(f"Local MAC: {mac or 'N/A'}")
-                self.logger.info(f"Local Adapter IP: {local or 'N/A'}")
+                win_logger.info("")
+                win_logger.info(f"Interface: {interface or 'N/A'}")
+                win_logger.info(f"Local MAC: {mac or 'N/A'}")
+                win_logger.info(f"Local Adapter IP: {local or 'N/A'}")
                 if gw_ips:
-                    self.logger.info(f"Default Gateway(s): {', '.join(gw_ips)}")
+                    win_logger.info(f"Default Gateway(s): {', '.join(gw_ips)}")
 
                 if target["vpn_active"]:
                     if target["fell_back_iface"] and subnet is not None:
-                        self.logger.warning(
+                        win_logger.warning(
                             "VPN connection detected — switched from tunnel interface to physical LAN adapter and Default Gateway."
                         )
                     elif subnet is not None:
-                        self.logger.warning(
+                        win_logger.warning(
                             "VPN connection detected — LAN discovery may be restricted by VPN routing. Scanning available local network and Default Gateway."
                         )
                     elif extra_ips:
-                        self.logger.warning(
+                        win_logger.warning(
                             "VPN connection detected — unable to determine physical LAN subnet. Scanning Default Gateway only."
                         )
                     else:
-                        self.logger.warning(
+                        win_logger.warning(
                             "VPN connection detected — no scannable local LAN subnet or Default Gateway found."
                         )
 
                 if target["apipa"]:
-                    self.logger.warning("APIPA detected (169.254.x.x). No DHCP lease — LAN scan disabled.")
+                    win_logger.warning("APIPA detected (169.254.x.x). No DHCP lease — LAN scan disabled.")
                 elif subnet is not None:
-                    self.logger.info(f"Detected Subnet: {subnet}")
+                    win_logger.info(f"Detected Subnet: {subnet}")
                 elif not target["vpn_active"]:
                     if extra_ips:
-                        self.logger.warning(
+                        win_logger.warning(
                             "Unable to determine local subnet mask — scanning Default Gateway only."
                         )
                     elif isinstance(local, str) and "." in local:
-                        self.logger.warning("Unable to determine network mask — LAN scan disabled.")
+                        win_logger.warning("Unable to determine network mask — LAN scan disabled.")
                     else:
-                        self.logger.warning("Subnet detection skipped (IPv6 or no IP)")
+                        win_logger.warning("Subnet detection skipped (IPv6 or no IP)")
 
                 if (not subnet and not extra_ips) or run_stop_event.is_set():
                     return
@@ -1929,6 +2207,7 @@ class LanScanner:
                     do_port_scan=True,
                     stop_event=run_stop_event,
                     extra_ips=extra_ips,
+                    logger=win_logger,
                 )
 
                 if self.lan_win is lanscan_win:
@@ -1938,45 +2217,27 @@ class LanScanner:
 
                 elapsed = time.time() - start_time
 
-                self.logger.info("")
-                self.logger.info(f"LAN scan finished in {elapsed:.1f}s")
+                win_logger.info("")
+                win_logger.info(f"LAN scan finished in {elapsed:.1f}s")
 
-                def finished():
-                    try:
-                        if not lanscan_win.winfo_exists():
-                            return
-
-                        progress.stop()
-                        if run_stop_event.is_set():
-                            status_var.set("Stopped")
-                        else:
-                            status_var.set("Finished")
-
-                        btn_start["state"] = "normal"
-                        btn_stop["state"] = "disabled"
-
-                    except (tk.TclError, RuntimeError):
-                        pass
-
-                try:
-                    lanscan_win.after(0, finished)
-                except (tk.TclError, RuntimeError):
-                    pass
+                ui_queue.put(("done", (run_id, run_stop_event.is_set())))
 
         # Buttons
         def start_scan():
 
-            if self.scan_thread and self.scan_thread.is_alive():
+            if win_state["thread"] and win_state["thread"].is_alive():
                 return
 
             txt.config(state="normal")
             txt.delete("1.0", "end")
             txt.config(state="disabled")
 
-            self.log_buffer.seek(0)
-            self.log_buffer.truncate(0)
+            win_log_buffer.clear()
 
             run_stop_event = threading.Event()
+            win_state["run_stop_event"] = run_stop_event
+            win_state["run_id"] += 1
+            current_run_id = win_state["run_id"]
             self.stop_event = run_stop_event
 
             btn_start["state"] = "disabled"
@@ -1986,18 +2247,20 @@ class LanScanner:
 
             progress.start(15)
 
-            self.scan_thread = threading.Thread(
+            t = threading.Thread(
                 target=scan_worker,
-                args=(run_stop_event,),
+                args=(run_stop_event, current_run_id),
                 daemon=True
             )
+            win_state["thread"] = t
+            self.scan_thread = t
 
-            self.scan_thread.start()
+            t.start()
 
         def stop_scan():
 
-            if self.stop_event is not None:
-                self.stop_event.set()
+            if win_state["run_stop_event"] is not None:
+                win_state["run_stop_event"].set()
 
             try:
                 if lanscan_win.winfo_exists():
@@ -2007,13 +2270,13 @@ class LanScanner:
             except tk.TclError:
                 pass
 
-            self.logger.warning("Stop requested...")
+            win_logger.warning("Stop requested...")
 
         def export_logs():
             _export_log_buffer(
                 lanscan_win,
                 "Export Network Discovery Log",
-                self.log_buffer,
+                win_log_buffer,
                 handle_errors=True
             )
 
@@ -2043,19 +2306,78 @@ class LanScanner:
         )
         btn_export.grid(row=0, column=2, padx=5)
 
+        # Main-thread UI queue poller (drains logs FIFO before applying done state)
+        def drain_ui_queue():
+            if win_state["closed"]:
+                return
+            try:
+                if not lanscan_win.winfo_exists():
+                    win_state["closed"] = True
+                    return
+
+                log_batch = []
+                done_payload = None
+                while True:
+                    try:
+                        kind, payload = ui_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if kind == "log":
+                        log_batch.append(payload)
+                    elif kind == "done":
+                        done_payload = payload
+
+                if log_batch:
+                    txt.config(state="normal")
+                    txt.insert("end", "\n".join(log_batch) + "\n")
+                    txt.see("end")
+                    txt.config(state="disabled")
+
+                if done_payload is not None:
+                    finished_run_id, was_stopped = done_payload
+                    if finished_run_id == win_state["run_id"]:
+                        progress.stop()
+                        status_var.set("Stopped" if was_stopped else "Finished")
+                        btn_start["state"] = "normal"
+                        btn_stop["state"] = "disabled"
+
+                win_state["poll_job"] = lanscan_win.after(40, drain_ui_queue)
+            except (tk.TclError, RuntimeError):
+                win_state["closed"] = True
+
         def on_close():
+            if win_state["closed"]:
+                return
+            win_state["closed"] = True
 
-            if self.stop_event is not None:
-                self.stop_event.set()
+            if win_state["poll_job"] is not None:
+                try:
+                    lanscan_win.after_cancel(win_state["poll_job"])
+                except (tk.TclError, RuntimeError):
+                    pass
+                win_state["poll_job"] = None
 
-            if self.text_handler:
-                self.logger.removeHandler(self.text_handler)
+            win_stop_event.set()
+            if win_state["run_stop_event"] is not None:
+                win_state["run_stop_event"].set()
+
+            _close_logger_handlers(win_logger)
+            if self.text_handler is win_text_handler:
                 self.text_handler = None
 
-            self.lan_win = None
-            lanscan_win.destroy()
+            if self.lan_win is lanscan_win:
+                self.lan_win = None
+
+            try:
+                if lanscan_win.winfo_exists():
+                    lanscan_win.destroy()
+            except (tk.TclError, RuntimeError):
+                pass
 
         lanscan_win.protocol("WM_DELETE_WINDOW", on_close)
+        lanscan_win.bind("<Destroy>", lambda e: on_close() if e.widget is lanscan_win else None)
+
+        win_state["poll_job"] = lanscan_win.after(40, drain_ui_queue)
 
         # Show the window ONLY after the entire UI has been created.
         lanscan_win.deiconify()
@@ -2267,7 +2589,6 @@ class NetStatus:
 
         show_net.title("NAT Status")
         show_net.resizable(False, False)
-        show_net.transient(parent)
 
         def _center_window(win_w, win_h):
             parent.update_idletasks()
@@ -2287,11 +2608,6 @@ class NetStatus:
             font=("Segoe UI", 10)
         )
         loading_label.pack(pady=35)
-
-        show_net.deiconify()
-        show_net.lift()
-        show_net.focus_force()
-        show_net.grab_set()
 
         def _render_result(net_status, dns, isp, region, conn_type):
             try:
@@ -2380,6 +2696,46 @@ class NetStatus:
                 command=show_net.destroy
             ).pack(pady=(8, 12))
 
+        result_queue: "queue.Queue" = queue.Queue()
+        net_state = {"closed": False, "poll_job": None}
+
+        def on_close():
+            if net_state["closed"]:
+                return
+            net_state["closed"] = True
+            if net_state["poll_job"] is not None:
+                try:
+                    show_net.after_cancel(net_state["poll_job"])
+                except (tk.TclError, RuntimeError):
+                    pass
+                net_state["poll_job"] = None
+            try:
+                if show_net.winfo_exists():
+                    show_net.destroy()
+            except (tk.TclError, RuntimeError):
+                pass
+
+        show_net.protocol("WM_DELETE_WINDOW", on_close)
+        show_net.bind("<Destroy>", lambda e: on_close() if e.widget is show_net else None, add="+")
+        attach_native_modal(parent, show_net)
+
+        def _poll_result():
+            if net_state["closed"]:
+                return
+            try:
+                if not show_net.winfo_exists():
+                    net_state["closed"] = True
+                    return
+                try:
+                    payload = result_queue.get_nowait()
+                except queue.Empty:
+                    net_state["poll_job"] = show_net.after(40, _poll_result)
+                    return
+                net_state["poll_job"] = None
+                _render_result(*payload)
+            except (tk.TclError, RuntimeError):
+                net_state["closed"] = True
+
         def _worker():
             net_status = self.check_internet_connection()
             dns = self.get_dns_servers()
@@ -2393,12 +2749,9 @@ class NetStatus:
                 vpn_status = self.get_vpn_connection()
                 conn_type = "VPN" if vpn_status == "Enabled (connected)" else "Direct"
 
-            try:
-                if show_net.winfo_exists():
-                    show_net.after(0, _render_result, net_status, dns, isp, region, conn_type)
-            except tk.TclError:
-                pass
+            result_queue.put((net_status, dns, isp, region, conn_type))
 
+        net_state["poll_job"] = show_net.after(40, _poll_result)
         threading.Thread(target=_worker, daemon=True).start()
 
 # ===== CLASS Speedtest =====
@@ -2418,7 +2771,6 @@ class SpeedTest:
 
         show_speed.title("Speed Test")
         show_speed.resizable(False, False)
-        show_speed.transient(self.parent)
         
         # --- center window ---
         win_w, win_h = 400, 180
@@ -2497,22 +2849,36 @@ class SpeedTest:
                 except Exception:
                     pass
 
+        show_speed._poll_job = None
+        speed_closed = [False]
+        result_queue: "queue.Queue" = queue.Queue()
+
         def on_close():
+            if speed_closed[0]:
+                return
+            speed_closed[0] = True
             cancel_event.set()
             _close_active_responses()
             if show_speed._timer_job:
                 try:
                     show_speed.after_cancel(show_speed._timer_job)
-                except tk.TclError:
+                except (tk.TclError, RuntimeError):
                     pass
                 show_speed._timer_job = None
+            if show_speed._poll_job:
+                try:
+                    show_speed.after_cancel(show_speed._poll_job)
+                except (tk.TclError, RuntimeError):
+                    pass
+                show_speed._poll_job = None
             try:
                 if show_speed.winfo_exists():
                     show_speed.destroy()
-            except tk.TclError:
+            except (tk.TclError, RuntimeError):
                 pass
 
         show_speed.protocol("WM_DELETE_WINDOW", on_close)
+        show_speed.bind("<Destroy>", lambda e: on_close() if e.widget is show_speed else None, add="+")
 
         # --- download worker ---
         def _download_thread(url, lock, counter, round_stop):
@@ -2642,21 +3008,32 @@ class SpeedTest:
                 command=on_close
             ).pack(pady=(10, 20))
 
-        # --- background thread ---
+        # --- main-thread poller & background thread ---
+        def _poll_speed_result():
+            if speed_closed[0] or cancel_event.is_set():
+                return
+            try:
+                if not show_speed.winfo_exists():
+                    speed_closed[0] = True
+                    return
+                try:
+                    avg = result_queue.get_nowait()
+                except queue.Empty:
+                    show_speed._poll_job = show_speed.after(40, _poll_speed_result)
+                    return
+                show_speed._poll_job = None
+                update_result(avg)
+            except (tk.TclError, RuntimeError):
+                speed_closed[0] = True
+
         def run_speed_test():
             avg = _measure_download_speed()
             if cancel_event.is_set():
                 return
-            try:
-                if show_speed.winfo_exists():
-                    show_speed.after(0, update_result, avg)
-            except tk.TclError:
-                pass
+            result_queue.put(avg)
 
+        show_speed._poll_job = show_speed.after(40, _poll_speed_result)
         threading.Thread(target=run_speed_test, daemon=True).start()
 
         # Show only after the window is completely built
-        show_speed.deiconify()
-        show_speed.lift()
-        show_speed.focus_force()
-        show_speed.grab_set()
+        attach_native_modal(self.parent, show_speed)
